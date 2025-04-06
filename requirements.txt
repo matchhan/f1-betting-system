@@ -1,9 +1,9 @@
 fastf1
 xgboost
-python-telegram-bot
-pandas
-numpy
-requests
 scikit-learn
 streamlit
-telegram
+pandas
+numpy
+tqdm
+jupyter
+matplotlib
