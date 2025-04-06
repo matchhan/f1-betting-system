@@ -70,9 +70,10 @@ if st.button('Predict Next Race Probabilities'):
                     'points': row['Points'],
                     'laps': row['laps'],
                     'status': row['Status'],
-                    'fastest_lap_time': row['FastestLapTime'],
-                    'fastest_lap_speed': row['FastestLapSpeed'],
+                    'fastest_lap_time': row.get('FastestLapTime', np.nan),
+                    'fastest_lap_speed': row.get('FastestLapSpeed', np.nan),
                 })
+
 
     df = pd.DataFrame(all_race_data)
 
