@@ -1,4 +1,5 @@
 import os
+import logging
 import fastf1
 import pandas as pd
 import numpy as np
@@ -9,6 +10,10 @@ from sklearn.model_selection import train_test_split
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import log_loss, accuracy_score
 import xgboost as xgb
+
+# Suppress FastF1 internal warnings
+logging.getLogger('fastf1').setLevel(logging.ERROR)
+logging.getLogger('urllib3').setLevel(logging.ERROR)
 
 # Ensure FastF1 cache directory exists
 cache_dir = './fastf1_cache'
@@ -36,15 +41,13 @@ if st.button('Predict Next Race Probabilities'):
                 session.load()
 
                 if not session.loaded:
-                    st.warning(f"Session not fully loaded for Round {round_number} ({year}). Skipping.")
                     continue
 
                 # Collect event name and date safely
-                race_name = session.event['EventName'] if 'EventName' in session.event else f"Round {round_number}"
+                race_name = session.event.get('EventName', f"Round {round_number}")
                 race_date = session.date.date() if session.date else None
 
-            except Exception as e:
-                print(f"Failed to load session Round {round_number} ({year}): {e}")
+            except Exception:
                 continue
 
             results = session.results
@@ -187,5 +190,5 @@ if st.button('Predict Next Race Probabilities'):
 
                 break  # Exit after finding the next valid race
 
-            except Exception as e:
+            except Exception:
                 continue  # Continue looking for the next valid round
