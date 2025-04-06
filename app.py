@@ -11,9 +11,13 @@ from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import log_loss, accuracy_score
 import xgboost as xgb
 
-# Suppress FastF1 internal warnings
-logging.getLogger('fastf1').setLevel(logging.ERROR)
-logging.getLogger('urllib3').setLevel(logging.ERROR)
+# Suppress all FastF1 internal logs and urllib3
+logging.getLogger('fastf1').setLevel(logging.CRITICAL)
+logging.getLogger('fastf1.api').setLevel(logging.CRITICAL)
+logging.getLogger('fastf1.req').setLevel(logging.CRITICAL)
+logging.getLogger('fastf1.events').setLevel(logging.CRITICAL)
+logging.getLogger('fastf1.livetiming').setLevel(logging.CRITICAL)
+logging.getLogger('urllib3').setLevel(logging.CRITICAL)
 
 # Ensure FastF1 cache directory exists
 cache_dir = './fastf1_cache'
@@ -48,7 +52,7 @@ if st.button('Predict Next Race Probabilities'):
                 race_date = session.date.date() if session.date else None
 
             except Exception:
-                continue
+                continue  # Skip problematic sessions silently
 
             results = session.results
             if results is None or results.empty:
