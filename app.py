@@ -34,7 +34,7 @@ if st.button('Predict Next Race Probabilities'):
             schedule = fastf1.get_event_schedule(year)
         except Exception as e:
             st.warning(f"Warning: Failed to load schedule for {year}. Error: {e}")
-            continue  # Optional: you can let it crash, or handle gracefully
+            continue  # Optional: skip years with no schedule
 
         for _, race in schedule.iterrows():
             race_name = race['EventName']
@@ -44,12 +44,17 @@ if st.button('Predict Next Race Probabilities'):
             try:
                 session = fastf1.get_session(year, round_number, 'R')
                 session.load()
+
+                if not session.loaded:
+                    st.warning(f"Session not fully loaded for {race_name} ({year}). Skipping.")
+                    continue
+
             except Exception as e:
                 print(f"Failed to load session {race_name}: {e}")
                 continue
 
             results = session.results
-            if results is None:
+            if results is None or results.empty:
                 continue
 
             # Calculate laps completed safely
@@ -157,43 +162,46 @@ if st.button('Predict Next Race Probabilities'):
                 session = fastf1.get_session(latest_year, round_number, 'R')
                 session.load()
 
-                race_data = []
-
-                results = session.results
-                if results is None:
-                    st.warning("No results available yet for the next race.")
+                if not session.loaded:
+                    st.warning(f"Next race session not fully loaded. Skipping prediction.")
                 else:
-                    history = df.copy()
+                    race_data = []
 
-                    for index, row in results.iterrows():
-                        driver = row.get('Abbreviation', np.nan)
-
-                        driver_history = history[history['driver'] == driver].tail(5)
-
-                        avg_pos_last_3 = driver_history.tail(3)['position'].mean() if not driver_history.tail(3).empty else np.nan
-                        avg_pos_last_5 = driver_history['position'].mean() if not driver_history.empty else np.nan
-
-                        race_data.append({
-                            'grid_position': row.get('GridPosition', np.nan),
-                            'team_encoded': le_team.transform([row.get('TeamName', '')])[0] if row.get('TeamName', '') in le_team.classes_ else 0,
-                            'points': row.get('Points', np.nan),
-                            'laps': row.get('Laps', np.nan),
-                            'fastest_lap_speed': row.get('FastestLapSpeed', np.nan),
-                            'avg_position_last_3': avg_pos_last_3,
-                            'avg_position_last_5': avg_pos_last_5,
-                            'driver': driver
-                        })
-
-                    upcoming_df = pd.DataFrame(race_data).dropna(subset=features)
-
-                    if upcoming_df.empty:
-                        st.warning("Not enough data to make predictions for the next race.")
+                    results = session.results
+                    if results is None or results.empty:
+                        st.warning("No results available yet for the next race.")
                     else:
-                        probabilities = calibrated_model.predict_proba(upcoming_df[features])[:, 1]
-                        upcoming_df['win_probability'] = probabilities
+                        history = df.copy()
 
-                        st.write("Win Probabilities for Next Race:")
-                        st.dataframe(upcoming_df[['driver', 'win_probability']].sort_values(by='win_probability', ascending=False))
+                        for index, row in results.iterrows():
+                            driver = row.get('Abbreviation', np.nan)
+
+                            driver_history = history[history['driver'] == driver].tail(5)
+
+                            avg_pos_last_3 = driver_history.tail(3)['position'].mean() if not driver_history.tail(3).empty else np.nan
+                            avg_pos_last_5 = driver_history['position'].mean() if not driver_history.empty else np.nan
+
+                            race_data.append({
+                                'grid_position': row.get('GridPosition', np.nan),
+                                'team_encoded': le_team.transform([row.get('TeamName', '')])[0] if row.get('TeamName', '') in le_team.classes_ else 0,
+                                'points': row.get('Points', np.nan),
+                                'laps': row.get('Laps', np.nan),
+                                'fastest_lap_speed': row.get('FastestLapSpeed', np.nan),
+                                'avg_position_last_3': avg_pos_last_3,
+                                'avg_position_last_5': avg_pos_last_5,
+                                'driver': driver
+                            })
+
+                        upcoming_df = pd.DataFrame(race_data).dropna(subset=features)
+
+                        if upcoming_df.empty:
+                            st.warning("Not enough data to make predictions for the next race.")
+                        else:
+                            probabilities = calibrated_model.predict_proba(upcoming_df[features])[:, 1]
+                            upcoming_df['win_probability'] = probabilities
+
+                            st.write("Win Probabilities for Next Race:")
+                            st.dataframe(upcoming_df[['driver', 'win_probability']].sort_values(by='win_probability', ascending=False))
 
             except Exception as e:
                 st.error(f"Failed to load next race session: {e}")
