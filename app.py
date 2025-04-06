@@ -49,22 +49,31 @@ if st.button('Predict Next Race Probabilities'):
             if results is None:
                 continue
 
-            for index, row in results.iterrows():
-                all_race_data.append({
-                    'year': year,
-                    'round': round_number,
-                    'race_name': race_name,
-                    'date': race_date,
-                    'driver': row['Abbreviation'],
-                    'team': row['TeamName'],
-                    'grid_position': row['GridPosition'],
-                    'position': row['Position'],
-                    'points': row['Points'],
-                    'laps': row['NumberOfLaps'],
-                    'status': row['Status'],
-                    'fastest_lap_time': row['FastestLapTime'],
-                    'fastest_lap_speed': row['FastestLapSpeed'],
-                })
+# Calculate the number of laps completed by each driver
+laps_completed = session.laps.groupby('Driver')['LapNumber'].max().reset_index()
+laps_completed.rename(columns={'LapNumber': 'laps'}, inplace=True)
+
+# Merge the results with the laps completed data
+results = results.merge(laps_completed, left_on='Abbreviation', right_on='Driver', how='left')
+results.drop(columns=['Driver'], inplace=True)  # Drop the redundant 'Driver' column
+
+for index, row in results.iterrows():
+    all_race_data.append({
+        'year': year,
+        'round': round_number,
+        'race_name': race_name,
+        'date': race_date,
+        'driver': row['Abbreviation'],
+        'team': row['TeamName'],
+        'grid_position': row['GridPosition'],
+        'position': row['Position'],
+        'points': row['Points'],
+        'laps': row['laps'],  # Now correctly referencing the computed laps
+        'status': row['Status'],
+        'fastest_lap_time': row['FastestLapTime'],
+        'fastest_lap_speed': row['FastestLapSpeed'],
+    })
+
 
     df = pd.DataFrame(all_race_data)
 
