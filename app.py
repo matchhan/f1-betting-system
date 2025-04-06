@@ -101,10 +101,14 @@ def fetch_weather_data(city_name):
         response.raise_for_status()
         weather_data = response.json()
 
-        # Extract relevant weather data (temperature, weather description)
-        temperature = weather_data['main']['temp']
-        weather_desc = weather_data['weather'][0]['description']
-        return f"{temperature}°C, {weather_desc}"
+        # Check if the 'main' and 'weather' keys exist in the response
+        if 'main' in weather_data and 'weather' in weather_data:
+            temperature = weather_data['main'].get('temp', 'N/A')
+            weather_desc = weather_data['weather'][0].get('description', 'Unknown')
+            return f"{temperature}°C, {weather_desc}"
+        else:
+            st.error(f"Unexpected weather data structure: {json.dumps(weather_data)}")
+            return "Unknown"
 
     except Exception as e:
         st.error(f"Error fetching weather data: {str(e)}")
