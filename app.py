@@ -29,7 +29,44 @@ fastf1.Cache.enable_cache(cache_dir)
 # Streamlit App
 st.title("F1 Race Win Probability Predictor")
 st.write("Click the button below to generate win probabilities for the next race.")
+st.write("Or check the last completed race to confirm data is up to date.")
 
+# --- New: Check Previous Race Results Button ---
+if st.button('Show Previous Race Results'):
+    latest_year = datetime.now().year
+    found_previous_race = False
+
+    for round_number in reversed(range(1, 25)):
+        try:
+            session = fastf1.get_session(latest_year, round_number, 'R')
+            session.load()
+
+            if not session.loaded:
+                continue
+
+            results = session.results
+            if results is None or results.empty:
+                continue
+
+            st.success(f"Previous race: Round {round_number} - {session.event.get('EventName', '')}")
+            df_results = results[['Abbreviation', 'Position', 'TeamName', 'Points']].sort_values(by='Position')
+            st.dataframe(df_results.rename(columns={
+                'Abbreviation': 'Driver',
+                'TeamName': 'Team',
+                'Position': 'Finish Position',
+                'Points': 'Points Earned'
+            }))
+
+            found_previous_race = True
+            break
+
+        except Exception:
+            continue
+
+    if not found_previous_race:
+        st.warning("No completed race found yet for this season.")
+
+# --- Predict Next Race Probabilities ---
 if st.button('Predict Next Race Probabilities'):
 
     # Step 1: Data collection
@@ -47,25 +84,22 @@ if st.button('Predict Next Race Probabilities'):
                 if not session.loaded:
                     continue
 
-                # Collect event name and date safely
                 race_name = session.event.get('EventName', f"Round {round_number}")
                 race_date = session.date.date() if session.date else None
 
             except Exception:
-                continue  # Skip problematic sessions silently
+                continue
 
             results = session.results
             if results is None or results.empty:
                 continue
 
-            # Calculate laps completed safely
             if not session.laps.empty:
                 laps_completed = session.laps.groupby('Driver')['LapNumber'].max().reset_index()
                 laps_completed.rename(columns={'LapNumber': 'laps'}, inplace=True)
             else:
                 laps_completed = pd.DataFrame({'Driver': results['Abbreviation'], 'laps': np.nan})
 
-            # Merge results with laps data
             results = results.merge(laps_completed, left_on='Abbreviation', right_on='Driver', how='left')
             results.drop(columns=['Driver'], inplace=True)
 
@@ -93,7 +127,6 @@ if st.button('Predict Next Race Probabilities'):
     else:
         st.success(f"Collected data for {df.shape[0]} race entries.")
 
-        # Summary of missing data
         st.write("Data Collection Summary:")
         st.write(f"- Total race entries: {df.shape[0]}")
         st.write(f"- Missing lap counts: {df['laps'].isna().sum()}")
@@ -111,39 +144,34 @@ if st.button('Predict Next Race Probabilities'):
         df['driver_encoded'] = le_driver.fit_transform(df['driver'])
         df['team_encoded'] = le_team.fit_transform(df['team'])
 
-        # Add race number per driver to order races
         df.sort_values(by=['driver', 'year', 'round'], inplace=True)
         df['race_number'] = df.groupby('driver').cumcount() + 1
 
-        # Create average position in last 3 and last 5 races
         df['avg_position_last_3'] = df.groupby('driver')['position'].transform(lambda x: x.rolling(window=3, min_periods=1).mean())
         df['avg_position_last_5'] = df.groupby('driver')['position'].transform(lambda x: x.rolling(window=5, min_periods=1).mean())
 
         st.write("Added average positions for last 3 and 5 races.")
 
-        features = ['grid_position', 'team_encoded', 'points', 'laps', 'fastest_lap_speed', 'avg_position_last_3', 'avg_position_last_5']
+        features = ['grid_position', 'team_encoded', 'points', 'laps', 'fastest_lap_speed',
+                    'avg_position_last_3', 'avg_position_last_5']
         df = df.dropna(subset=features)
 
         X = df[features]
         y = df['win']
 
-        # Step 3: Train/test split
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-        # Step 4: Model training with calibration
         st.write("Training model...")
         base_model = xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss')
         calibrated_model = CalibratedClassifierCV(base_model, method='isotonic', cv=3)
         calibrated_model.fit(X_train, y_train)
 
-        # Step 5: Evaluate model
         y_pred_proba = calibrated_model.predict_proba(X_test)[:, 1]
         y_pred = calibrated_model.predict(X_test)
 
         st.write(f'Log Loss: {log_loss(y_test, y_pred_proba):.4f}')
         st.write(f'Accuracy: {accuracy_score(y_test, y_pred):.4f}')
 
-        # Step 6: Predict next race
         st.write("Predicting next race...")
 
         latest_year = datetime.now().year
@@ -192,7 +220,7 @@ if st.button('Predict Next Race Probabilities'):
                     st.write("Win Probabilities for Next Race:")
                     st.dataframe(upcoming_df[['driver', 'win_probability']].sort_values(by='win_probability', ascending=False))
 
-                break  # Exit after finding the next valid race
+                break  # Stop after finding the first future race
 
             except Exception:
-                continue  # Continue looking for the next valid round
+                continue
