@@ -21,6 +21,7 @@ BASE_URL = "https://api.the-odds-api.com/v4/sports/motorsport_formula_one/odds"
 
 # Weather API Setup
 weather_api_key = "9902ad598ba458f05379b0deb1f086b7"
+weather_base_url = "https://api.openweathermap.org/data/2.5/weather"
 
 # Load and preprocess F1 Data using FastF1
 def load_data():
@@ -35,8 +36,13 @@ def load_data():
 
 def fetch_f1_data():
     try:
+        # Create the cache directory if it doesn't exist
+        cache_dir = 'f1_cache'
+        if not os.path.exists(cache_dir):
+            os.makedirs(cache_dir)
+
         # Initialize FastF1
-        fastf1.Cache.enable_cache('f1_cache')  # Enable caching to store F1 data
+        fastf1.Cache.enable_cache(cache_dir)  # Enable caching to store F1 data
 
         # Define the race seasons and rounds to fetch data
         years = range(2018, 2023)  # Adjust years accordingly
@@ -54,6 +60,9 @@ def fetch_f1_data():
                         fastf1.get_practice_data(year, race['round'], 3),  # Practice 3
                     ]
 
+                    # Get weather data for the race location (city)
+                    weather = fetch_weather_data(race['location']['locality'])
+
                     for driver in race_result['results']:
                         driver_name = driver['Driver']['familyName']
                         finishing_position = driver['positionOrder']
@@ -68,7 +77,7 @@ def fetch_f1_data():
                             "finish_position": finishing_position,
                             "time": time,
                             "lap_time": lap_time,
-                            "weather": "Sunny",  # Placeholder for weather, you can fetch it from another source
+                            "weather": weather,  # Adding weather data to the race record
                         })
 
         # Convert race data to DataFrame
@@ -79,6 +88,27 @@ def fetch_f1_data():
     except Exception as e:
         st.error(f"Error fetching data: {str(e)}")
         return None
+
+def fetch_weather_data(city_name):
+    try:
+        # Make the API request to OpenWeather
+        params = {
+            'q': city_name,
+            'appid': weather_api_key,
+            'units': 'metric'
+        }
+        response = requests.get(weather_base_url, params=params)
+        response.raise_for_status()
+        weather_data = response.json()
+
+        # Extract relevant weather data (temperature, weather description)
+        temperature = weather_data['main']['temp']
+        weather_desc = weather_data['weather'][0]['description']
+        return f"{temperature}°C, {weather_desc}"
+
+    except Exception as e:
+        st.error(f"Error fetching weather data: {str(e)}")
+        return "Unknown"
 
 # Convert decimal odds to implied probability
 def calculate_implied_probability(odds):
