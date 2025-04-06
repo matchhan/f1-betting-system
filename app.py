@@ -10,6 +10,7 @@ import joblib
 import telegram
 import os
 import fastf1
+import asyncio  # Import asyncio to handle async calls
 
 # Telegram Bot Setup
 telegram_bot_token = "7630284552:AAHKzWIuRqMCon032ycjHC5r2AME-y-JEho"
@@ -101,14 +102,10 @@ def fetch_weather_data(city_name):
         response.raise_for_status()
         weather_data = response.json()
 
-        # Check if the 'main' and 'weather' keys exist in the response
-        if 'main' in weather_data and 'weather' in weather_data:
-            temperature = weather_data['main'].get('temp', 'N/A')
-            weather_desc = weather_data['weather'][0].get('description', 'Unknown')
-            return f"{temperature}°C, {weather_desc}"
-        else:
-            st.error(f"Unexpected weather data structure: {json.dumps(weather_data)}")
-            return "Unknown"
+        # Extract relevant weather data (temperature, weather description)
+        temperature = weather_data['main']['temp']
+        weather_desc = weather_data['weather'][0]['description']
+        return f"{temperature}°C, {weather_desc}"
 
     except Exception as e:
         st.error(f"Error fetching weather data: {str(e)}")
@@ -169,10 +166,10 @@ def train_model(df):
     joblib.dump(model, 'f1_model.joblib')
     st.write("Model training complete!")
 
-# Send a test message to Telegram
-def send_telegram_message(message):
+# Send a test message to Telegram (make this async)
+async def send_telegram_message(message):
     bot = telegram.Bot(token=telegram_bot_token)
-    bot.send_message(chat_id=telegram_chat_id, text=message)
+    await bot.send_message(chat_id=telegram_chat_id, text=message)
     st.write("Test message sent to Telegram!")
 
 # Scrape Pinnacle Odds
@@ -249,7 +246,7 @@ def main():
     
     # Send test Telegram button
     if st.button("Send Test Telegram"):
-        send_telegram_message("Test message from your F1 Betting System!")
+        asyncio.run(send_telegram_message("Test message from your F1 Betting System!"))
     
     # Scrape Pinnacle Odds button
     if st.button("Scrape Pinnacle Odds"):
