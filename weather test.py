@@ -6,7 +6,7 @@ import requests
 from datetime import datetime, timedelta
 
 # Use your existing OpenWeather API key (from context)
-API_KEY = 'YOUR_API_KEY'  # Replace this with your actual API key or Streamlit secret
+API_KEY = '9902ad598ba458f05379b0deb1f086b7'  # Replace this with your actual API key or Streamlit secret
 
 # Set up FastF1 cache
 cache_dir = './fastf1_cache'
