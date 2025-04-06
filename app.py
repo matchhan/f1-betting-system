@@ -48,9 +48,10 @@ def fetch_f1_data():
             season = fastf1.get_event_schedule(year)
             for race in season:
                 if race['raceName'] not in ['Sprint', 'Qualifying']:  # Skip sprint races
-                    # Fetch race result and check if the result is a valid dictionary
                     try:
+                        # Fetch race result and check if the result is a valid dictionary
                         race_result = fastf1.get_race_result(year, race['round'])
+                        st.write(f"Race result for {race['raceName']} (Year {year}, Round {race['round']}): {race_result}")  # Debug output
                         if not isinstance(race_result, dict):
                             st.error(f"Unexpected data type for race result: {type(race_result)}")
                             continue
@@ -58,9 +59,9 @@ def fetch_f1_data():
                         st.error(f"Error fetching race result: {str(e)}")
                         continue
 
-                    # Similarly, handle qualifying and practice session results
                     try:
                         qualifying = fastf1.get_qualifying_results(year, race['round'])
+                        st.write(f"Qualifying data for {race['raceName']} (Year {year}, Round {race['round']}): {qualifying}")  # Debug output
                         if not isinstance(qualifying, dict):
                             st.error(f"Unexpected data type for qualifying: {type(qualifying)}")
                             continue
@@ -74,8 +75,8 @@ def fetch_f1_data():
                             fastf1.get_practice_data(year, race['round'], 2),
                             fastf1.get_practice_data(year, race['round'], 3),
                         ]
-                        # Check the practice sessions to ensure they are valid
                         for session in practice_sessions:
+                            st.write(f"Practice session data: {session}")  # Debug output
                             if not isinstance(session, dict):
                                 st.error(f"Unexpected data type for practice session: {type(session)}")
                                 continue
