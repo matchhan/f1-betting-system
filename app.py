@@ -16,10 +16,6 @@ import asyncio  # Import asyncio to handle async calls
 telegram_bot_token = "7630284552:AAHKzWIuRqMCon032ycjHC5r2AME-y-JEho"
 telegram_chat_id = "7863097165"
 
-# The Odds API Setup
-API_KEY = "475a918d769547f547ae7dbb6ddf02a8"
-BASE_URL = "https://api.the-odds-api.com/v4/sports/motorsport_formula_one/odds"
-
 # Weather API Setup
 weather_api_key = "9902ad598ba458f05379b0deb1f086b7"
 weather_base_url = "https://api.openweathermap.org/data/2.5/weather"
@@ -57,7 +53,10 @@ def fetch_f1_data():
                 if race['raceName'] not in ['Sprint', 'Qualifying']:  # Skip sprint races
                     try:
                         race_result = fastf1.get_race_result(year, race['round'])
-                        st.write(f"Race result for {race['raceName']} (Year {year}, Round {race['round']}): {type(race_result)}")  # Debug output
+                        # Log the type of the response to identify any issues
+                        st.write(f"Race result for {race['raceName']} (Year {year}, Round {race['round']}): {type(race_result)}")
+                        st.write(f"Race result content: {race_result}")  # Output the actual result to debug
+
                         if not isinstance(race_result, dict):
                             st.error(f"Unexpected data type for race result: {type(race_result)}")
                             continue
@@ -87,8 +86,6 @@ def fetch_f1_data():
     except Exception as e:
         st.error(f"Error fetching data: {str(e)}")
         return None
-
-
 
 def fetch_weather_data(city_name):
     try:
@@ -160,23 +157,13 @@ def main():
         asyncio.run(send_telegram_message("Test message from your F1 Betting System!"))
     
     # Radio button for data entry method
-    entry_choice = st.radio("Choose Data Entry Method", ("Manually Enter Data", "Scrape Betcha Odds"))
+    entry_choice = st.radio("Choose Data Entry Method", ("Manually Enter Data"))
 
     if entry_choice == "Manually Enter Data":
         df = manual_data_entry()
         if df is not None:
             st.write("Manually Entered Data:")
             st.dataframe(df)
-
-    elif entry_choice == "Scrape Betcha Odds":
-        url_input = st.text_input("Enter the URL for F1 Grand Prix Odds", "https://www.betcha.co.nz/sports/motor-sport/formula-1/gp-japan-race/768194d2-d4ec-4e32-b1da-b42a55116bc5")
-        if st.button("Scrape Betcha Odds"):
-            df, log = scrape_betcha_odds(url_input)
-            st.write(log)
-            if not df.empty:
-                st.dataframe(df)
-            else:
-                st.write("No data available.")
 
 if __name__ == "__main__":
     main()
