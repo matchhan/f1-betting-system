@@ -57,7 +57,7 @@ def fetch_f1_data():
                 if race['raceName'] not in ['Sprint', 'Qualifying']:  # Skip sprint races
                     try:
                         race_result = fastf1.get_race_result(year, race['round'])
-                        st.write(f"Race result for {race['raceName']} (Year {year}, Round {race['round']}): {race_result}")  # Debug output
+                        st.write(f"Race result for {race['raceName']} (Year {year}, Round {race['round']}): {type(race_result)}")  # Debug output
                         if not isinstance(race_result, dict):
                             st.error(f"Unexpected data type for race result: {type(race_result)}")
                             continue
@@ -67,7 +67,7 @@ def fetch_f1_data():
 
                     try:
                         qualifying = fastf1.get_qualifying_results(year, race['round'])
-                        st.write(f"Qualifying data for {race['raceName']} (Year {year}, Round {race['round']}): {qualifying}")  # Debug output
+                        st.write(f"Qualifying data for {race['raceName']} (Year {year}, Round {race['round']}): {type(qualifying)}")  # Debug output
                         if not isinstance(qualifying, dict):
                             st.error(f"Unexpected data type for qualifying: {type(qualifying)}")
                             continue
@@ -82,7 +82,7 @@ def fetch_f1_data():
                             fastf1.get_practice_data(year, race['round'], 3),
                         ]
                         for session in practice_sessions:
-                            st.write(f"Practice session data: {session}")  # Debug output
+                            st.write(f"Practice session data: {type(session)}")  # Debug output
                             if not isinstance(session, dict):
                                 st.error(f"Unexpected data type for practice session: {type(session)}")
                                 continue
@@ -94,22 +94,16 @@ def fetch_f1_data():
                     weather = fetch_weather_data(race['location']['locality'])
 
                     # Process the race result data
-                    for driver in race_result['results']:
-                        driver_name = driver['Driver']['familyName']
-                        finishing_position = driver['positionOrder']
-                        time = driver['Time']['time'] if 'Time' in driver else "N/A"
-                        lap_time = driver['FastestLap']['Time']['time'] if 'FastestLap' in driver else "N/A"
-
-                        race_data.append({
-                            "year": year,
-                            "round": race['round'],
-                            "race_name": race['raceName'],
-                            "driver": driver_name,
-                            "finish_position": finishing_position,
-                            "time": time,
-                            "lap_time": lap_time,
-                            "weather": weather,
-                        })
+                    if isinstance(race_result, dict) and 'results' in race_result:
+                        for driver in race_result['results']:
+                            if isinstance(driver, dict) and 'Driver' in driver:
+                                driver_name = driver['Driver']['familyName']
+                                race_data.append({
+                                    "year": year,
+                                    "round": race['round'],
+                                    "race_name": race['raceName'],
+                                    "driver": driver_name,
+                                })
 
         df = pd.DataFrame(race_data)
         df.to_csv("f1_data.csv", index=False)  # Save the data to CSV for future use
@@ -118,6 +112,7 @@ def fetch_f1_data():
     except Exception as e:
         st.error(f"Error fetching data: {str(e)}")
         return None
+
 
 def fetch_weather_data(city_name):
     try:
