@@ -1,7 +1,12 @@
+import os
 import fastf1
 
-# Enable cache (optional but good practice)
-fastf1.Cache.enable_cache('./fastf1_cache')
+# Create the cache directory programmatically (important for Streamlit Cloud!)
+cache_dir = './fastf1_cache'
+os.makedirs(cache_dir, exist_ok=True)
+
+# Enable cache
+fastf1.Cache.enable_cache(cache_dir)
 
 # Pick a known past race — safe data
 year = 2023
