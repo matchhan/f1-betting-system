@@ -24,55 +24,74 @@ st.write("Click the button below to generate win probabilities for the next race
 
 if st.button('Predict Next Race Probabilities'):
 
-    # Step 1: Data collection
+        # Step 1: Data collection
     years = list(range(2018, datetime.now().year + 1))
     all_race_data = []
-
+    
     st.write("Collecting race data...")
-
-    for year in tqdm(years, desc="Seasons"):
+    
+    # Add a Streamlit progress bar
+    progress_text = "Loading race data..."
+    progress_bar = st.progress(0, text=progress_text)
+    total_races = sum(len(fastf1.get_event_schedule(year)) for year in years)
+    race_counter = 0
+    
+    for year in years:
         schedule = fastf1.get_event_schedule(year)
-
+    
         for _, race in schedule.iterrows():
             race_name = race['EventName']
             race_date = race['Session1Date'].date()
             round_number = race['RoundNumber']
-
+    
             try:
                 session = fastf1.get_session(year, round_number, 'R')
                 session.load()
             except Exception as e:
                 print(f"Failed to load session {race_name}: {e}")
+                race_counter += 1
+                progress_bar.progress(min(race_counter / total_races, 1.0), text=f"{progress_text} ({race_counter}/{total_races})")
                 continue
-
+    
             results = session.results
             if results is None:
+                race_counter += 1
+                progress_bar.progress(min(race_counter / total_races, 1.0), text=f"{progress_text} ({race_counter}/{total_races})")
                 continue
-
-            # ✅ Calculate the number of laps completed by each driver INSIDE the loop
-            laps_completed = session.laps.groupby('Driver')['LapNumber'].max().reset_index()
-            laps_completed.rename(columns={'LapNumber': 'laps'}, inplace=True)
-
+    
+            # Calculate the number of laps completed by each driver
+            if not session.laps.empty:
+                laps_completed = session.laps.groupby('Driver')['LapNumber'].max().reset_index()
+                laps_completed.rename(columns={'LapNumber': 'laps'}, inplace=True)
+            else:
+                # If laps data is missing, create an empty DataFrame with correct structure
+                laps_completed = pd.DataFrame({'Driver': results['Abbreviation'], 'laps': np.nan})
+    
             # Merge the results with the laps completed data
             results = results.merge(laps_completed, left_on='Abbreviation', right_on='Driver', how='left')
             results.drop(columns=['Driver'], inplace=True)  # Drop the redundant 'Driver' column
-
+    
             for index, row in results.iterrows():
                 all_race_data.append({
                     'year': year,
                     'round': round_number,
                     'race_name': race_name,
                     'date': race_date,
-                    'driver': row['Abbreviation'],
-                    'team': row['TeamName'],
-                    'grid_position': row['GridPosition'],
-                    'position': row['Position'],
-                    'points': row['Points'],
-                    'laps': row['laps'],
-                    'status': row['Status'],
+                    'driver': row.get('Abbreviation', np.nan),
+                    'team': row.get('TeamName', np.nan),
+                    'grid_position': row.get('GridPosition', np.nan),
+                    'position': row.get('Position', np.nan),
+                    'points': row.get('Points', np.nan),
+                    'laps': row.get('laps', np.nan),
+                    'status': row.get('Status', np.nan),
                     'fastest_lap_time': row.get('FastestLapTime', np.nan),
                     'fastest_lap_speed': row.get('FastestLapSpeed', np.nan),
                 })
+    
+            race_counter += 1
+            progress_bar.progress(min(race_counter / total_races, 1.0), text=f"{progress_text} ({race_counter}/{total_races})")
+
+progress_bar.empty()  # Remove the progress bar when done
 
 
     df = pd.DataFrame(all_race_data)
