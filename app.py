@@ -47,16 +47,46 @@ def fetch_f1_data():
         for year in years:
             season = fastf1.get_event_schedule(year)
             for race in season:
-                if race['raceName'] not in ['Sprint', 'Qualifying']:
-                    race_result = fastf1.get_race_result(year, race['round'])
-                    qualifying = fastf1.get_qualifying_results(year, race['round'])
-                    practice_sessions = [
-                        fastf1.get_practice_data(year, race['round'], 1),
-                        fastf1.get_practice_data(year, race['round'], 2),
-                        fastf1.get_practice_data(year, race['round'], 3),
-                    ]
+                if race['raceName'] not in ['Sprint', 'Qualifying']:  # Skip sprint races
+                    # Fetch race result and check if the result is a valid dictionary
+                    try:
+                        race_result = fastf1.get_race_result(year, race['round'])
+                        if not isinstance(race_result, dict):
+                            st.error(f"Unexpected data type for race result: {type(race_result)}")
+                            continue
+                    except Exception as e:
+                        st.error(f"Error fetching race result: {str(e)}")
+                        continue
+
+                    # Similarly, handle qualifying and practice session results
+                    try:
+                        qualifying = fastf1.get_qualifying_results(year, race['round'])
+                        if not isinstance(qualifying, dict):
+                            st.error(f"Unexpected data type for qualifying: {type(qualifying)}")
+                            continue
+                    except Exception as e:
+                        st.error(f"Error fetching qualifying results: {str(e)}")
+                        continue
+
+                    try:
+                        practice_sessions = [
+                            fastf1.get_practice_data(year, race['round'], 1),
+                            fastf1.get_practice_data(year, race['round'], 2),
+                            fastf1.get_practice_data(year, race['round'], 3),
+                        ]
+                        # Check the practice sessions to ensure they are valid
+                        for session in practice_sessions:
+                            if not isinstance(session, dict):
+                                st.error(f"Unexpected data type for practice session: {type(session)}")
+                                continue
+                    except Exception as e:
+                        st.error(f"Error fetching practice data: {str(e)}")
+                        continue
+                    
+                    # Handle weather data
                     weather = fetch_weather_data(race['location']['locality'])
 
+                    # Process the race result data
                     for driver in race_result['results']:
                         driver_name = driver['Driver']['familyName']
                         finishing_position = driver['positionOrder']
@@ -81,6 +111,7 @@ def fetch_f1_data():
     except Exception as e:
         st.error(f"Error fetching data: {str(e)}")
         return None
+
 
 def fetch_weather_data(city_name):
     try:
