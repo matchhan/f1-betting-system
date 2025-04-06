@@ -1,5 +1,4 @@
 import os
-import logging
 import fastf1
 import pandas as pd
 import numpy as np
@@ -11,14 +10,6 @@ from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import log_loss, accuracy_score
 import xgboost as xgb
 
-# Suppress all FastF1 internal logs and urllib3
-logging.getLogger('fastf1').setLevel(logging.CRITICAL)
-logging.getLogger('fastf1.api').setLevel(logging.CRITICAL)
-logging.getLogger('fastf1.req').setLevel(logging.CRITICAL)
-logging.getLogger('fastf1.events').setLevel(logging.CRITICAL)
-logging.getLogger('fastf1.livetiming').setLevel(logging.CRITICAL)
-logging.getLogger('urllib3').setLevel(logging.CRITICAL)
-
 # Ensure FastF1 cache directory exists
 cache_dir = './fastf1_cache'
 os.makedirs(cache_dir, exist_ok=True)
@@ -28,15 +19,25 @@ fastf1.Cache.enable_cache(cache_dir)
 
 # Streamlit App
 st.title("F1 Race Win Probability Predictor")
-st.write("Click the button below to generate win probabilities for the next race.")
-st.write("Or check the last completed race to confirm data is up to date.")
+st.write("You can generate win probabilities for the next race, or check the latest race results to confirm data is up to date.")
 
-# --- New: Check Previous Race Results Button ---
-if st.button('Show Previous Race Results'):
+# --- Manual round selector for previous race results ---
+st.subheader("Check Previous Race Results")
+
+manual_round = st.number_input("Enter round number manually (e.g., 1, 2, 3...)", min_value=1, max_value=24, value=1, step=1)
+check_manual = st.button("Check Manual Round")
+auto_check = st.button('Auto-detect Previous Race Results')
+
+if check_manual or auto_check:
     latest_year = datetime.now().year
     found_previous_race = False
 
-    for round_number in reversed(range(1, 25)):
+    if check_manual:
+        rounds_to_check = [manual_round]
+    else:
+        rounds_to_check = list(reversed(range(1, 25)))  # Check backwards
+
+    for round_number in rounds_to_check:
         try:
             session = fastf1.get_session(latest_year, round_number, 'R')
             session.load()
@@ -48,7 +49,7 @@ if st.button('Show Previous Race Results'):
             if results is None or results.empty:
                 continue
 
-            st.success(f"Previous race: Round {round_number} - {session.event.get('EventName', '')}")
+            st.success(f"Race found: Round {round_number} - {session.event.get('EventName', '')}")
             df_results = results[['Abbreviation', 'Position', 'TeamName', 'Points']].sort_values(by='Position')
             st.dataframe(df_results.rename(columns={
                 'Abbreviation': 'Driver',
@@ -60,23 +61,24 @@ if st.button('Show Previous Race Results'):
             found_previous_race = True
             break
 
-        except Exception:
+        except Exception as e:
+            st.warning(f"Could not load Round {round_number}: {e}")
             continue
 
     if not found_previous_race:
-        st.warning("No completed race found yet for this season.")
+        st.warning("No completed race found yet for this selection or season.")
 
-# --- Predict Next Race Probabilities ---
+# --- Main button to predict next race ---
 if st.button('Predict Next Race Probabilities'):
 
     # Step 1: Data collection
     st.write("Collecting race data...")
 
-    years = list(range(2018, datetime.now().year + 1))  # All years up to current year
+    years = list(range(2018, datetime.now().year + 1))  # From 2018 to current year
     all_race_data = []
 
     for year in years:
-        for round_number in range(1, 25):  # Up to 24 rounds per season
+        for round_number in range(1, 25):
             try:
                 session = fastf1.get_session(year, round_number, 'R')
                 session.load()
@@ -87,13 +89,15 @@ if st.button('Predict Next Race Probabilities'):
                 race_name = session.event.get('EventName', f"Round {round_number}")
                 race_date = session.date.date() if session.date else None
 
-            except Exception:
+            except Exception as e:
+                st.warning(f"Skipped Year {year} Round {round_number}: {e}")
                 continue
 
             results = session.results
             if results is None or results.empty:
                 continue
 
+            # Calculate laps completed
             if not session.laps.empty:
                 laps_completed = session.laps.groupby('Driver')['LapNumber'].max().reset_index()
                 laps_completed.rename(columns={'LapNumber': 'laps'}, inplace=True)
@@ -103,7 +107,7 @@ if st.button('Predict Next Race Probabilities'):
             results = results.merge(laps_completed, left_on='Abbreviation', right_on='Driver', how='left')
             results.drop(columns=['Driver'], inplace=True)
 
-            for index, row in results.iterrows():
+            for _, row in results.iterrows():
                 all_race_data.append({
                     'year': year,
                     'round': round_number,
@@ -172,6 +176,7 @@ if st.button('Predict Next Race Probabilities'):
         st.write(f'Log Loss: {log_loss(y_test, y_pred_proba):.4f}')
         st.write(f'Accuracy: {accuracy_score(y_test, y_pred):.4f}')
 
+        # Step 3: Predict next race
         st.write("Predicting next race...")
 
         latest_year = datetime.now().year
@@ -191,7 +196,7 @@ if st.button('Predict Next Race Probabilities'):
                 race_data = []
                 history = df.copy()
 
-                for index, row in results.iterrows():
+                for _, row in results.iterrows():
                     driver = row.get('Abbreviation', np.nan)
                     driver_history = history[history['driver'] == driver].tail(5)
 
@@ -220,7 +225,8 @@ if st.button('Predict Next Race Probabilities'):
                     st.write("Win Probabilities for Next Race:")
                     st.dataframe(upcoming_df[['driver', 'win_probability']].sort_values(by='win_probability', ascending=False))
 
-                break  # Stop after finding the first future race
+                break  # Stop after finding the next race
 
-            except Exception:
+            except Exception as e:
+                st.warning(f"Could not load future race round {round_number}: {e}")
                 continue
