@@ -1,3 +1,4 @@
+import os
 import fastf1
 import pandas as pd
 import numpy as np
@@ -10,8 +11,12 @@ from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import log_loss, accuracy_score
 import xgboost as xgb
 
+# Ensure FastF1 cache directory exists
+cache_dir = './fastf1_cache'
+os.makedirs(cache_dir, exist_ok=True)
+
 # Initialise FastF1 cache
-fastf1.Cache.enable_cache('./fastf1_cache')
+fastf1.Cache.enable_cache(cache_dir)
 
 # Streamlit App
 st.title("F1 Race Win Probability Predictor")
