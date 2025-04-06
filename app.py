@@ -7,6 +7,8 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
 from sklearn.calibration import CalibratedClassifierCV
 import xgboost as xgb
+from datetime import datetime
+import pytz
 
 # Set up cache
 cache_dir = './fastf1_cache'
@@ -14,7 +16,7 @@ os.makedirs(cache_dir, exist_ok=True)
 fastf1.Cache.enable_cache(cache_dir)
 
 # Streamlit app
-st.title("F1 FastF1 Test App: Explore Race Results")
+st.title("F1 FastF1 App: Explore Race Results + Predict Next Race")
 
 st.write("Use the dropdown menus below to select a season and round number to display race results.")
 
@@ -28,6 +30,7 @@ round_number = st.selectbox("Select Round", options=round_options, index=0)
 # Declare session globally
 session = None
 
+# --- Existing manual race loader ---
 if st.button("Load Race Data"):
     try:
         st.write(f"Loading race data for **Year {year}, Round {round_number}**...")
@@ -41,7 +44,7 @@ if st.button("Load Race Data"):
         st.write("### Session Info:")
         st.json(session.event.to_dict())
 
-        # Show race results in table
+        # Show race results
         results = session.results
         if results is not None and not results.empty:
             df_results = results[['Abbreviation', 'Position', 'TeamName', 'Points']].sort_values(by='Position')
@@ -61,69 +64,124 @@ if st.button("Load Race Data"):
     except Exception as e:
         st.error(f"❌ Error loading session: {e}")
 
-# --- NEW: Machine learning model button ---
-if st.button("Generate Win Predictions"):
+# --- New: Predict next race ---
+if st.button("Generate Next Race Predictions"):
     try:
         st.write("Preparing data for prediction...")
 
-        # For simplicity, use the current session only for training (demo purpose)
-        session = fastf1.get_session(year, round_number, 'R')
+        # Prepare historical training data
+        historical_data = []
+        le_driver = LabelEncoder()
+        le_team = LabelEncoder()
+        drivers_list = []
+        teams_list = []
+
+        for past_year in range(2018, 2024):
+            for past_round in range(1, 24):
+                try:
+                    past_session = fastf1.get_session(past_year, past_round, 'R')
+                    past_session.load()
+
+                    if past_session.results is None or past_session.results.empty:
+                        continue
+
+                    df = past_session.results.copy()
+                    df['win'] = (df['Position'] == 1).astype(int)
+
+                    drivers_list.extend(df['Abbreviation'].unique())
+                    teams_list.extend(df['TeamName'].unique())
+
+                    df['grid_position'] = df['GridPosition']
+                    df['points'] = df['Points']
+                    df['laps'] = 0
+
+                    df['year'] = past_year
+                    df['round'] = past_round
+
+                    historical_data.append(df)
+
+                except Exception:
+                    continue
+
+        if not historical_data:
+            st.warning("No historical data available to train the model.")
+            st.stop()
+
+        df_historical = pd.concat(historical_data)
+
+        # Fit encoders
+        le_driver.fit(drivers_list)
+        le_team.fit(teams_list)
+
+        df_historical['driver_encoded'] = le_driver.transform(df_historical['Abbreviation'])
+        df_historical['team_encoded'] = le_team.transform(df_historical['TeamName'])
+
+        features = ['grid_position', 'team_encoded', 'points', 'laps']
+        X = df_historical[features]
+        y = df_historical['win']
+
+        # Train model
+        base_model = xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss')
+        calibrated_model = CalibratedClassifierCV(base_model, method='isotonic', cv=3)
+        calibrated_model.fit(X, y)
+
+        # Prepare next race data
+        upcoming_year = 2024
+        next_round = 1
+
+        # Find the next scheduled race
+        found_next_race = False
+        for round_num in range(1, 24):
+            try:
+                future_session = fastf1.get_session(upcoming_year, round_num, 'R')
+                future_session.load()
+
+                if future_session.results is not None and not future_session.results.empty:
+                    continue  # Skip completed races
+
+                next_round = round_num
+                found_next_race = True
+                break
+            except Exception:
+                continue
+
+        if not found_next_race:
+            st.warning("No upcoming race found in the schedule.")
+            st.stop()
+
+        # Display race info
+        session = fastf1.get_session(upcoming_year, next_round, 'R')
         session.load()
 
-        results = session.results
+        # Timezone conversion
+        utc_datetime = session.date
+        nz_tz = pytz.timezone('Pacific/Auckland')
+        nz_datetime = utc_datetime.astimezone(nz_tz)
 
-        if results is None or results.empty:
-            st.warning("No results data available to generate predictions.")
-        else:
-            df = results.copy()
+        st.success(f"Next race: **{session.event['EventName']}** at **{session.event['Location']}**")
+        st.info(f"Race date/time (NZST): **{nz_datetime.strftime('%Y-%m-%d %H:%M:%S')}**")
 
-            # Simple feature engineering
-            df['win'] = (df['Position'] == 1).astype(int)
+        if session.results is None or session.results.empty:
+            st.warning("No entry list or results yet for this session.")
+            st.stop()
 
-            le_driver = LabelEncoder()
-            le_team = LabelEncoder()
+        df_test = session.results.copy()
 
-            df['driver_encoded'] = le_driver.fit_transform(df['Abbreviation'])
-            df['team_encoded'] = le_team.fit_transform(df['TeamName'])
+        df_test['grid_position'] = df_test['GridPosition']
+        df_test['points'] = df_test['Points']
+        df_test['laps'] = 0
 
-            # Basic features
-            df['grid_position'] = df['GridPosition']
-            df['points'] = df['Points']
+        df_test['driver_encoded'] = le_driver.transform(df_test['Abbreviation'])
+        df_test['team_encoded'] = le_team.transform(df_test['TeamName'])
 
-            # Handle laps
-            if not session.laps.empty:
-                laps_completed = session.laps.groupby('Driver')['LapNumber'].max().reset_index()
-                laps_completed.rename(columns={'LapNumber': 'laps'}, inplace=True)
-                df = df.merge(laps_completed, left_on='Abbreviation', right_on='Driver', how='left')
-                df['laps'] = df['laps'].fillna(0)
-                df.drop(columns=['Driver'], inplace=True)
-            else:
-                df['laps'] = 0
+        X_test = df_test[features]
+        df_test['win_probability'] = calibrated_model.predict_proba(X_test)[:, 1]
 
-            # Features and target
-            features = ['grid_position', 'team_encoded', 'points', 'laps']
-            X = df[features]
-            y = df['win']
+        df_predictions = df_test[['Abbreviation', 'win_probability']].sort_values(by='win_probability', ascending=False)
+        df_predictions.columns = ['Driver', 'Win Probability']
 
-            # Simple train/test split (we will use same data to train and predict for demo purposes)
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-            # Model training
-            base_model = xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss')
-            calibrated_model = CalibratedClassifierCV(base_model, method='isotonic', cv=3)
-            calibrated_model.fit(X_train, y_train)
-
-            # Predict probabilities
-            probabilities = calibrated_model.predict_proba(X)[:, 1]
-            df['win_probability'] = probabilities
-
-            st.success(f"Predictions generated for: {session.event['EventName']} on {session.date.date()}")
-
-            # Display predictions
-            df_predictions = df[['Abbreviation', 'win_probability']].sort_values(by='win_probability', ascending=False)
-            df_predictions.columns = ['Driver', 'Win Probability']
-            st.write("### Win Probabilities")
-            st.dataframe(df_predictions)
+        st.write("### Win Probabilities for Next Race")
+        st.dataframe(df_predictions)
 
     except Exception as e:
         st.error(f"❌ Error generating predictions: {e}")
