@@ -60,7 +60,7 @@ if st.button('Predict Next Race Probabilities'):
                     'grid_position': row['GridPosition'],
                     'position': row['Position'],
                     'points': row['Points'],
-                    'laps': row['Laps'],
+                    'laps': row['NumberOfLaps'],
                     'status': row['Status'],
                     'fastest_lap_time': row['FastestLapTime'],
                     'fastest_lap_speed': row['FastestLapSpeed'],
