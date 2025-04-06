@@ -65,35 +65,7 @@ def fetch_f1_data():
                         st.error(f"Error fetching race result: {str(e)}")
                         continue
 
-                    try:
-                        qualifying = fastf1.get_qualifying_results(year, race['round'])
-                        st.write(f"Qualifying data for {race['raceName']} (Year {year}, Round {race['round']}): {type(qualifying)}")  # Debug output
-                        if not isinstance(qualifying, dict):
-                            st.error(f"Unexpected data type for qualifying: {type(qualifying)}")
-                            continue
-                    except Exception as e:
-                        st.error(f"Error fetching qualifying results: {str(e)}")
-                        continue
-
-                    try:
-                        practice_sessions = [
-                            fastf1.get_practice_data(year, race['round'], 1),
-                            fastf1.get_practice_data(year, race['round'], 2),
-                            fastf1.get_practice_data(year, race['round'], 3),
-                        ]
-                        for session in practice_sessions:
-                            st.write(f"Practice session data: {type(session)}")  # Debug output
-                            if not isinstance(session, dict):
-                                st.error(f"Unexpected data type for practice session: {type(session)}")
-                                continue
-                    except Exception as e:
-                        st.error(f"Error fetching practice data: {str(e)}")
-                        continue
-                    
-                    # Handle weather data
-                    weather = fetch_weather_data(race['location']['locality'])
-
-                    # Process the race result data
+                    # Debugging: Check if race_result['results'] is accessible
                     if isinstance(race_result, dict) and 'results' in race_result:
                         for driver in race_result['results']:
                             if isinstance(driver, dict) and 'Driver' in driver:
@@ -104,6 +76,9 @@ def fetch_f1_data():
                                     "race_name": race['raceName'],
                                     "driver": driver_name,
                                 })
+                    else:
+                        st.error("No results found or incorrect data format for race result.")
+                        continue
 
         df = pd.DataFrame(race_data)
         df.to_csv("f1_data.csv", index=False)  # Save the data to CSV for future use
@@ -112,6 +87,7 @@ def fetch_f1_data():
     except Exception as e:
         st.error(f"Error fetching data: {str(e)}")
         return None
+
 
 
 def fetch_weather_data(city_name):
