@@ -112,7 +112,6 @@ def fetch_f1_data():
         st.error(f"Error fetching data: {str(e)}")
         return None
 
-
 def fetch_weather_data(city_name):
     try:
         params = {'q': city_name, 'appid': weather_api_key, 'units': 'metric'}
@@ -126,32 +125,12 @@ def fetch_weather_data(city_name):
         st.error(f"Error fetching weather data: {str(e)}")
         return "Unknown"
 
-def calculate_implied_probability(odds):
-    try:
-        return round(1 / odds, 4)
-    except ZeroDivisionError:
-        return 0.0
+# Sending test telegram message
+async def send_telegram_message(message):
+    bot = telegram.Bot(token=telegram_bot_token)
+    await bot.send_message(chat_id=telegram_chat_id, text=message)
+    st.write("Test message sent to Telegram!")
 
-def format_scraper_log(df):
-    if df.empty:
-        return "No odds found."
-    event_time = df['event_time'].iloc[0].strftime("%Y-%m-%d %H:%M:%S") if 'event_time' in df.columns and not df['event_time'].isna().all() else "Unknown"
-    last_update = df['last_update'].iloc[0] if 'last_update' in df.columns and not df['last_update'].isna().all() else "Unknown"
-    log = f"✅ Odds Scraped: {len(df)} entries\n🕒 Event Time: {event_time}\n🔄 Last Update from Bookmaker: {last_update}"
-    return log
-
-# Convert bankroll percentage to fixed stake amount
-def calculate_stake(bankroll, percentage):
-    return round(bankroll * (percentage / 100), 2)
-
-# Kelly Criterion calculator (1/8 Kelly as you prefer)
-def kelly_fraction(probability, odds, fraction=0.125):
-    edge = (odds * probability) - 1
-    if edge <= 0:
-        return 0
-    return min(edge / (odds - 1) * fraction, 0.025)
-
-# Manually enter race data
 def manual_data_entry():
     st.subheader("Manually Enter F1 Race Data")
 
@@ -178,50 +157,7 @@ def manual_data_entry():
         return df
     return None
 
-# Scrape Betcha F1 Odds
-def scrape_betcha_odds(url):
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.text, 'html.parser')
-
-        all_odds = []
-        
-        race_events = soup.find_all("div", class_="race-event-class")  # Replace with correct class
-
-        for race_event in race_events:
-            race_name = race_event.find("div", class_="race-name").text.strip()  # Update class
-            event_time = race_event.find("div", class_="event-time").text.strip()  # Update class
-            drivers = race_event.find_all("div", class_="driver-class")  # Update class for drivers
-
-            for driver in drivers:
-                driver_name = driver.find("span", class_="driver-name").text.strip()  # Update class
-                odds = float(driver.find("span", class_="odds-amount").text.strip())  # Update class
-                implied_prob = calculate_implied_probability(odds)
-
-                all_odds.append({
-                    "sport": "F1",
-                    "race": race_name,
-                    "event_time": event_time,
-                    "driver": driver_name,
-                    "bookmaker": "Betcha",
-                    "market": "h2h",  # Head-to-head market
-                    "odds": odds,
-                    "implied_probability": implied_prob,
-                })
-
-        df = pd.DataFrame(all_odds)
-
-        if df.empty:
-            return pd.DataFrame(), "No Betcha F1 odds found."
-
-        return df, format_scraper_log(df)
-
-    except Exception as e:
-        return pd.DataFrame(), f"Error scraping Betcha odds: {str(e)}"
-
-# Main function
+# Main function with test buttons and logs
 def main():
     st.title("F1 Betting System")
 
@@ -231,12 +167,17 @@ def main():
         st.write("Displaying F1 Data:")
         st.dataframe(data)
     
-    # Train model button
-    if st.button("Train Machine Learning Model"):
-        if data is not None:
-            train_model(data)
+    # Button to test loading F1 data
+    if st.button("Test Fetch F1 Data"):
+        st.write("Testing F1 data fetch...")
+        test_data = fetch_f1_data()
+        if test_data is not None:
+            st.write("F1 Data fetched successfully!")
+            st.dataframe(test_data)
+        else:
+            st.write("Error fetching F1 data.")
     
-    # Send test Telegram button
+    # Button to send test Telegram message
     if st.button("Send Test Telegram"):
         asyncio.run(send_telegram_message("Test message from your F1 Betting System!"))
     
