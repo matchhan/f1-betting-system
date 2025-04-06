@@ -11,11 +11,14 @@ fastf1.Cache.enable_cache(cache_dir)
 # Streamlit app
 st.title("F1 FastF1 Test App: Explore Race Results")
 
-st.write("Use the inputs below to select a season and round number to display race results.")
+st.write("Use the dropdown menus below to select a season and round number to display race results.")
 
-# Manual year and round input
-year = st.number_input("Select Year", min_value=2018, max_value=2025, value=2023, step=1)
-round_number = st.number_input("Select Round", min_value=1, max_value=24, value=1, step=1)
+# Manual year and round input as dropdown menus
+year_options = list(range(2018, 2025 + 1))
+round_options = list(range(1, 24 + 1))
+
+year = st.selectbox("Select Year", options=year_options, index=year_options.index(2023))
+round_number = st.selectbox("Select Round", options=round_options, index=0)
 
 if st.button("Load Race Data"):
     try:
