@@ -24,6 +24,13 @@ BASE_URL = "https://api.the-odds-api.com/v4/sports/motorsport_formula_one/odds"
 weather_api_key = "9902ad598ba458f05379b0deb1f086b7"
 weather_base_url = "https://api.openweathermap.org/data/2.5/weather"
 
+# Function to calculate implied probability from odds
+def calculate_implied_probability(odds):
+    try:
+        return round(1 / odds, 4)
+    except ZeroDivisionError:
+        return 0.0
+
 # Load and preprocess F1 Data using FastF1
 def load_data():
     if os.path.exists("f1_data.csv"):
@@ -49,7 +56,6 @@ def fetch_f1_data():
             for race in season:
                 if race['raceName'] not in ['Sprint', 'Qualifying']:  # Skip sprint races
                     try:
-                        # Fetch race result and check if the result is a valid dictionary
                         race_result = fastf1.get_race_result(year, race['round'])
                         st.write(f"Race result for {race['raceName']} (Year {year}, Round {race['round']}): {race_result}")  # Debug output
                         if not isinstance(race_result, dict):
