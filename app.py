@@ -175,6 +175,30 @@ def main():
     elif page == "Model Training":
         model_training_page()
 
+# Load your Telegram credentials from Streamlit secrets
+telegram_bot_token = st.secrets["telegram_bot_token"]
+telegram_chat_id = st.secrets["telegram_chat_id"]
+
+# Function to send a test message to Telegram
+def send_telegram_message(message):
+    url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
+    payload = {
+        "chat_id": telegram_chat_id,
+        "text": message
+    }
+    try:
+        response = requests.post(url, data=payload)
+        if response.status_code == 200:
+            st.success("Test message sent successfully!")
+        else:
+            st.error(f"Failed to send message: {response.text}")
+    except Exception as e:
+        st.error(f"Error sending message: {str(e)}")
+
+# Add a button in the Streamlit app to send the test message
+if st.button('Send Test Telegram Message'):
+    send_telegram_message("This is a test message from the F1 Betting System.")
+
 if __name__ == "__main__":
     main()
 
