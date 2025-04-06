@@ -12,13 +12,7 @@ import os
 import fastf1
 import asyncio  # Import asyncio to handle async calls
 
-# Telegram Bot Setup
-telegram_bot_token = "7630284552:AAHKzWIuRqMCon032ycjHC5r2AME-y-JEho"
-telegram_chat_id = "7863097165"
 
-# Weather API Setup
-weather_api_key = "9902ad598ba458f05379b0deb1f086b7"
-weather_base_url = "https://api.openweathermap.org/data/2.5/weather"
 
 # Function to calculate implied probability from odds
 def calculate_implied_probability(odds):
