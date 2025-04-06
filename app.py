@@ -2,32 +2,29 @@ import os
 import fastf1
 import pandas as pd
 import streamlit as st
-from datetime import timezone
-import pytz
-
-# Machine learning libraries
-import xgboost as xgb
 from sklearn.model_selection import train_test_split
 from sklearn.calibration import CalibratedClassifierCV
+from xgboost import XGBClassifier
 from sklearn.preprocessing import LabelEncoder
 
-# Set up FastF1 cache
+# Set up cache
 cache_dir = './fastf1_cache'
 os.makedirs(cache_dir, exist_ok=True)
 fastf1.Cache.enable_cache(cache_dir)
 
-# Streamlit app
-st.title("F1 FastF1 Test App: Explore Race Results & Predictions")
+st.title("F1 FastF1 Test App: Race Results & Next Race Prediction (with XGBoost)")
 
-st.write("Use the dropdown menus below to select a season and round number to display race results.")
-
-# Manual year and round input as dropdown menus
+# --- Dropdown to select year and round ---
 year_options = list(range(2018, 2025 + 1))
 round_options = list(range(1, 24 + 1))
 
 year = st.selectbox("Select Year", options=year_options, index=year_options.index(2023))
 round_number = st.selectbox("Select Round", options=round_options, index=0)
 
+# --- Dropdown for next race location ---
+next_race_location = st.text_input("Next Race Location (Manual Input)", value="Suzuka")
+
+# --- Load race data button ---
 if st.button("Load Race Data"):
     try:
         st.write(f"Loading race data for **Year {year}, Round {round_number}**...")
@@ -35,13 +32,13 @@ if st.button("Load Race Data"):
         session = fastf1.get_session(year, round_number, 'R')
         session.load()
 
-        st.success(f"✅ Successfully loaded: {session.event['EventName']} ({session.date.date()})")
+        st.success(f"✅ Loaded: {session.event['EventName']} ({session.date.date()})")
 
         # Show session info
         st.write("### Session Info:")
         st.json(session.event.to_dict())
 
-        # Show race results in table
+        # Prepare race results DataFrame
         results = session.results
         if results is not None and not results.empty:
             df_results = results[['Abbreviation', 'Position', 'TeamName', 'Points']].sort_values(by='Position')
@@ -51,182 +48,76 @@ if st.button("Load Race Data"):
         else:
             st.warning("No results available for this session.")
 
-        # Show lap data sample
-        if not session.laps.empty:
-            st.write("### Sample Lap Data")
-            st.dataframe(session.laps.head())
-        else:
-            st.warning("No lap data available.")
-
-    except Exception as e:
-        st.error(f"❌ Error loading session: {e}")
-
-# =========================
-# Machine Learning Section
-# =========================
-
-@st.cache_data
-def prepare_training_data():
-    data = []
-
-    for year in range(2018, 2024):  # use past seasons
-        try:
-            for round_number in range(1, 23):
-                session = fastf1.get_session(year, round_number, 'R')
-                session.load()
-
-                if session.results is None or session.results.empty:
+        # Load historical data for model training
+        st.write("Loading historical data...")
+        data = []
+        for hist_year in range(2018, 2025):
+            for rnd in range(1, 25):
+                try:
+                    hist_session = fastf1.get_session(hist_year, rnd, 'R')
+                    hist_session.load()
+                    hist_results = hist_session.results
+                    if hist_results is not None and not hist_results.empty:
+                        for _, row in hist_results.iterrows():
+                            data.append({
+                                'Year': hist_year,
+                                'Round': rnd,
+                                'Location': hist_session.event['EventName'],
+                                'Driver': row.Abbreviation,
+                                'Team': row.TeamName,
+                                'Grid Position': row.GridPosition,
+                                'Finish Position': row.Position,
+                                'Points': row.Points
+                            })
+                except Exception:
                     continue
 
-                for _, row in session.results.iterrows():
-                    data.append({
-                        'year': year,
-                        'round': round_number,
-                        'driver': row['Abbreviation'],
-                        'team': row['TeamName'],
-                        'grid_position': row['GridPosition'],
-                        'finish_position': row['Position'],
-                        'points': row['Points'],
-                        'status': row['Status'],
-                    })
-        except Exception:
-            continue
+        df_hist = pd.DataFrame(data)
+        st.write("Historical data collected:", df_hist.shape)
 
-    df = pd.DataFrame(data)
-    df.dropna(inplace=True)
+        # Encode categorical variables
+        le_driver = LabelEncoder()
+        le_team = LabelEncoder()
+        le_location = LabelEncoder()
 
-    # Encode categorical variables
-    le_driver = LabelEncoder()
-    le_team = LabelEncoder()
+        df_hist['Driver_encoded'] = le_driver.fit_transform(df_hist['Driver'])
+        df_hist['Team_encoded'] = le_team.fit_transform(df_hist['Team'])
+        df_hist['Location_encoded'] = le_location.fit_transform(df_hist['Location'])
 
-    df['driver_encoded'] = le_driver.fit_transform(df['driver'])
-    df['team_encoded'] = le_team.fit_transform(df['team'])
-    df['target'] = (df['finish_position'] == 1).astype(int)  # Predict win: 1 if win, 0 otherwise
+        # Define features and target
+        features = ['Driver_encoded', 'Team_encoded', 'Grid Position', 'Location_encoded']
+        df_hist['Winner'] = (df_hist['Finish Position'] == 1).astype(int)
 
-    features = ['grid_position', 'driver_encoded', 'team_encoded']
-    target = 'target'
+        X = df_hist[features]
+        y = df_hist['Winner']
 
-    return df[features], df[target], le_driver, le_team
+        # Split data
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-def train_model(X, y):
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        # Train XGBoost model
+        model = XGBClassifier(use_label_encoder=False, eval_metric='logloss')
+        calibrated_model = CalibratedClassifierCV(model, cv=3)
+        calibrated_model.fit(X_train, y_train)
 
-    model = xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss')
-    model.fit(X_train, y_train)
+        st.success("✅ Model trained successfully!")
 
-    calibrated_model = CalibratedClassifierCV(model, method='sigmoid', cv='prefit')
-    calibrated_model.fit(X_test, y_test)
+        # Prepare input data for next race prediction
+        input_data = df_results.copy()
+        input_data['Driver_encoded'] = le_driver.transform(input_data['Driver'])
+        input_data['Team_encoded'] = le_team.transform(input_data['Team'])
+        input_data['Grid Position'] = 5  # Assume average start position
+        input_data['Location_encoded'] = le_location.transform(
+            [next_race_location] * len(input_data)
+        )
 
-    return calibrated_model
+        X_input = input_data[features]
+        probs = calibrated_model.predict_proba(X_input)[:, 1]  # Probability of winning
 
-def predict_next_race(model, le_driver, le_team):
-    # Find next race
-    schedule = fastf1.get_event_schedule(2024, include_testing=False)
-    upcoming_races = schedule[schedule['Session5Date'] > pd.Timestamp.now(tz=timezone.utc)]
+        input_data['Win Probability (%)'] = (probs * 100).round(2)
 
-    if upcoming_races.empty:
-        return None, None, None
+        # Display predictions
+        st.write("### Win Probability Predictions for Next Race")
+        st.dataframe(input_data[['Driver', 'Team', 'Win Probability (%)']].sort_values(by='Win Probability (%)', ascending=False))
 
-    next_race = upcoming_races.iloc[0]
-    round_number = next_race['RoundNumber']
-    event_name = next_race['EventName']
-    event_date_utc = next_race['Session5Date']
-
-    # Convert time to NZST
-    nz_tz = pytz.timezone("Pacific/Auckland")
-    event_date_nz = event_date_utc.tz_convert(nz_tz)
-
-    input_data = []
-    drivers = []
-
-    try:
-        # Try to load qualifying / grid positions if available
-        session = fastf1.get_session(2024, round_number, 'R')
-        session.load()
-
-        if not session.results.empty:
-            for _, row in session.results.iterrows():
-                drivers.append(row['Abbreviation'])
-
-                try:
-                    driver_encoded = le_driver.transform([row['Abbreviation']])[0]
-                except:
-                    driver_encoded = -1  # unseen driver
-
-                try:
-                    team_encoded = le_team.transform([row['TeamName']])[0]
-                except:
-                    team_encoded = -1  # unseen team
-
-                input_data.append([
-                    row['GridPosition'],
-                    driver_encoded,
-                    team_encoded,
-                ])
-        else:
-            raise ValueError("Session results empty")
-
-    except Exception:
-        # No future session data yet: fallback to latest available race
-        st.info("No future session data available. Using latest race data as proxy.")
-
-        # Use last completed race as proxy
-        past_races = schedule[schedule['Session5Date'] < pd.Timestamp.now(tz=timezone.utc)]
-        if past_races.empty:
-            return None, event_name, event_date_nz
-
-        last_completed_race = past_races.iloc[-1]
-        last_round_number = last_completed_race['RoundNumber']
-
-        session = fastf1.get_session(2024, last_round_number, 'R')
-        session.load()
-
-        if session.results.empty:
-            return None, event_name, event_date_nz
-
-        for _, row in session.results.iterrows():
-            drivers.append(row['Abbreviation'])
-
-            try:
-                driver_encoded = le_driver.transform([row['Abbreviation']])[0]
-            except:
-                driver_encoded = -1
-
-            try:
-                team_encoded = le_team.transform([row['TeamName']])[0]
-            except:
-                team_encoded = -1
-
-            input_data.append([
-                row['GridPosition'],
-                driver_encoded,
-                team_encoded,
-            ])
-
-    # Predict probabilities
-    probabilities = model.predict_proba(input_data)[:, 1]
-
-    df_predictions = pd.DataFrame({
-        'Driver': drivers,
-        'Win Probability': probabilities
-    }).sort_values(by='Win Probability', ascending=False)
-
-    return df_predictions, event_name, event_date_nz
-
-# Streamlit Button for Model Training and Prediction
-if st.button("Train Model and Predict Next Race"):
-    with st.spinner("Training model..."):
-        X, y, le_driver, le_team = prepare_training_data()
-        model = train_model(X, y)
-
-    st.success("Model trained!")
-
-    with st.spinner("Generating predictions for next race..."):
-        predictions, race_name, race_time_nz = predict_next_race(model, le_driver, le_team)
-
-    if predictions is not None:
-        st.write(f"### Predictions for Next Race: {race_name}")
-        st.write(f"📍 **Race Time (NZST):** {race_time_nz.strftime('%Y-%m-%d %H:%M:%S')}")
-        st.dataframe(predictions)
-    else:
-        st.warning("Could not generate predictions — next race data unavailable or incomplete.")
+    except Exception as e:
+        st.error(f"❌ Error: {e}")
