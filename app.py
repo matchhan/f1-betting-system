@@ -3,7 +3,6 @@ import fastf1
 import pandas as pd
 import numpy as np
 import streamlit as st
-from tqdm import tqdm
 from datetime import datetime
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
@@ -27,37 +26,15 @@ if st.button('Predict Next Race Probabilities'):
     # Step 1: Data collection
     st.write("Collecting race data...")
 
-    # Detect available years safely
-    years = []
-    for year in range(2018, datetime.now().year + 2):  # Check up to next year
-        try:
-            fastf1.get_event_schedule(year)
-            years.append(year)
-        except Exception:
-            st.warning(f"Warning: No schedule found for {year}. Skipping.")
-            continue
-
+    years = list(range(2018, datetime.now().year + 2))  # Keep all years up to next year
     all_race_data = []
-
-    # Streamlit progress bar
-    progress_text = "Loading race data..."
-    total_races = 0
-    for year in years:
-        try:
-            total_races += len(fastf1.get_event_schedule(year))
-        except Exception as e:
-            st.warning(f"Warning: Failed to load schedule for {year}. Skipping.")
-            continue
-
-    progress_bar = st.progress(0, text=progress_text)
-    race_counter = 0
 
     for year in years:
         try:
             schedule = fastf1.get_event_schedule(year)
         except Exception as e:
-            st.warning(f"Warning: Failed to load schedule for {year}. Skipping.")
-            continue
+            st.warning(f"Warning: Failed to load schedule for {year}. Error: {e}")
+            continue  # Optional: you can let it crash, or handle gracefully
 
         for _, race in schedule.iterrows():
             race_name = race['EventName']
@@ -69,14 +46,10 @@ if st.button('Predict Next Race Probabilities'):
                 session.load()
             except Exception as e:
                 print(f"Failed to load session {race_name}: {e}")
-                race_counter += 1
-                progress_bar.progress(min(race_counter / total_races, 1.0), text=f"{progress_text} ({race_counter}/{total_races})")
                 continue
 
             results = session.results
             if results is None:
-                race_counter += 1
-                progress_bar.progress(min(race_counter / total_races, 1.0), text=f"{progress_text} ({race_counter}/{total_races})")
                 continue
 
             # Calculate laps completed safely
@@ -107,15 +80,10 @@ if st.button('Predict Next Race Probabilities'):
                     'fastest_lap_speed': row.get('FastestLapSpeed', np.nan),
                 })
 
-            race_counter += 1
-            progress_bar.progress(min(race_counter / total_races, 1.0), text=f"{progress_text} ({race_counter}/{total_races})")
-
-    progress_bar.empty()  # Remove progress bar when done
-
     df = pd.DataFrame(all_race_data)
 
     if df.empty:
-        st.error("No race data collected. Please check FastF1 installation.")
+        st.error("No race data collected. Please check FastF1 installation or API availability.")
     else:
         st.success(f"Collected data for {df.shape[0]} race entries.")
 
