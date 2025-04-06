@@ -6,3 +6,4 @@ numpy
 requests
 scikit-learn
 streamlit
+telegram
