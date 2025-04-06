@@ -49,31 +49,30 @@ if st.button('Predict Next Race Probabilities'):
             if results is None:
                 continue
 
-# Calculate the number of laps completed by each driver
-laps_completed = session.laps.groupby('Driver')['LapNumber'].max().reset_index()
-laps_completed.rename(columns={'LapNumber': 'laps'}, inplace=True)
+            # ✅ Calculate the number of laps completed by each driver INSIDE the loop
+            laps_completed = session.laps.groupby('Driver')['LapNumber'].max().reset_index()
+            laps_completed.rename(columns={'LapNumber': 'laps'}, inplace=True)
 
-# Merge the results with the laps completed data
-results = results.merge(laps_completed, left_on='Abbreviation', right_on='Driver', how='left')
-results.drop(columns=['Driver'], inplace=True)  # Drop the redundant 'Driver' column
+            # Merge the results with the laps completed data
+            results = results.merge(laps_completed, left_on='Abbreviation', right_on='Driver', how='left')
+            results.drop(columns=['Driver'], inplace=True)  # Drop the redundant 'Driver' column
 
-for index, row in results.iterrows():
-    all_race_data.append({
-        'year': year,
-        'round': round_number,
-        'race_name': race_name,
-        'date': race_date,
-        'driver': row['Abbreviation'],
-        'team': row['TeamName'],
-        'grid_position': row['GridPosition'],
-        'position': row['Position'],
-        'points': row['Points'],
-        'laps': row['laps'],  # Now correctly referencing the computed laps
-        'status': row['Status'],
-        'fastest_lap_time': row['FastestLapTime'],
-        'fastest_lap_speed': row['FastestLapSpeed'],
-    })
-
+            for index, row in results.iterrows():
+                all_race_data.append({
+                    'year': year,
+                    'round': round_number,
+                    'race_name': race_name,
+                    'date': race_date,
+                    'driver': row['Abbreviation'],
+                    'team': row['TeamName'],
+                    'grid_position': row['GridPosition'],
+                    'position': row['Position'],
+                    'points': row['Points'],
+                    'laps': row['laps'],
+                    'status': row['Status'],
+                    'fastest_lap_time': row['FastestLapTime'],
+                    'fastest_lap_speed': row['FastestLapSpeed'],
+                })
 
     df = pd.DataFrame(all_race_data)
 
@@ -93,7 +92,17 @@ for index, row in results.iterrows():
         df['driver_encoded'] = le_driver.fit_transform(df['driver'])
         df['team_encoded'] = le_team.fit_transform(df['team'])
 
-        features = ['grid_position', 'team_encoded', 'points', 'laps', 'fastest_lap_speed']
+        # Add race number per driver to order races
+        df.sort_values(by=['driver', 'year', 'round'], inplace=True)
+        df['race_number'] = df.groupby('driver').cumcount() + 1
+
+        # Create average position in last 3 and last 5 races
+        df['avg_position_last_3'] = df.groupby('driver')['position'].transform(lambda x: x.rolling(window=3, min_periods=1).mean())
+        df['avg_position_last_5'] = df.groupby('driver')['position'].transform(lambda x: x.rolling(window=5, min_periods=1).mean())
+
+        st.write("Added average positions for last 3 and 5 races.")
+
+        features = ['grid_position', 'team_encoded', 'points', 'laps', 'fastest_lap_speed', 'avg_position_last_3', 'avg_position_last_5']
         df = df.dropna(subset=features)
 
         X = df[features]
@@ -102,7 +111,7 @@ for index, row in results.iterrows():
         # Step 3: Train/test split
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-        # Step 4: Model training with calibration
+        # Step 4: Model training with calibration (no sample weight needed now)
         st.write("Training model...")
         base_model = xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss')
         calibrated_model = CalibratedClassifierCV(base_model, method='isotonic', cv=3)
@@ -138,22 +147,39 @@ for index, row in results.iterrows():
                 if results is None:
                     st.warning("No results available yet for the next race.")
                 else:
+                    # Prepare history data for new race predictions
+                    history = df.copy()
+
                     for index, row in results.iterrows():
+                        driver = row['Abbreviation']
+
+                        # Get last 3 and 5 races for the driver
+                        driver_history = history[history['driver'] == driver].tail(5)
+
+                        avg_pos_last_3 = driver_history.tail(3)['position'].mean() if not driver_history.tail(3).empty else np.nan
+                        avg_pos_last_5 = driver_history['position'].mean() if not driver_history.empty else np.nan
+
                         race_data.append({
                             'grid_position': row['GridPosition'],
                             'team_encoded': le_team.transform([row['TeamName']])[0] if row['TeamName'] in le_team.classes_ else 0,
                             'points': row['Points'],
                             'laps': row['Laps'],
                             'fastest_lap_speed': row['FastestLapSpeed'],
-                            'driver': row['Abbreviation']
+                            'avg_position_last_3': avg_pos_last_3,
+                            'avg_position_last_5': avg_pos_last_5,
+                            'driver': driver
                         })
 
-                    upcoming_df = pd.DataFrame(race_data)
-                    probabilities = calibrated_model.predict_proba(upcoming_df[features])[:, 1]
-                    upcoming_df['win_probability'] = probabilities
+                    upcoming_df = pd.DataFrame(race_data).dropna(subset=features)
 
-                    st.write("Win Probabilities for Next Race:")
-                    st.dataframe(upcoming_df[['driver', 'win_probability']].sort_values(by='win_probability', ascending=False))
+                    if upcoming_df.empty:
+                        st.warning("Not enough data to make predictions for the next race.")
+                    else:
+                        probabilities = calibrated_model.predict_proba(upcoming_df[features])[:, 1]
+                        upcoming_df['win_probability'] = probabilities
+
+                        st.write("Win Probabilities for Next Race:")
+                        st.dataframe(upcoming_df[['driver', 'win_probability']].sort_values(by='win_probability', ascending=False))
 
             except Exception as e:
                 st.error(f"Failed to load next race session: {e}")
