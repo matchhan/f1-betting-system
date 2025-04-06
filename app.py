@@ -197,3 +197,34 @@ def scrape_pinnacle_odds():
 
     except Exception as e:
         return pd.DataFrame(), f"Error scraping Pinnacle odds: {str(e)}"
+
+# Main function
+def main():
+    st.title("F1 Betting System")
+
+    # Load F1 data
+    data = load_data()
+    if data is not None:
+        st.write("Displaying F1 Data:")
+        st.dataframe(data)
+    
+    # Train model button
+    if st.button("Train Machine Learning Model"):
+        if data is not None:
+            train_model(data)
+    
+    # Send test Telegram button
+    if st.button("Send Test Telegram"):
+        send_telegram_message("Test message from your F1 Betting System!")
+    
+    # Scrape Pinnacle Odds button
+    if st.button("Scrape Pinnacle Odds"):
+        df, log = scrape_pinnacle_odds()
+        st.write(log)
+        if not df.empty:
+            st.dataframe(df)
+        else:
+            st.write("No data available.")
+
+if __name__ == "__main__":
+    main()
