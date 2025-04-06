@@ -3,7 +3,6 @@ import fastf1
 import pandas as pd
 import numpy as np
 import streamlit as st
-from datetime import datetime
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
 from sklearn.calibration import CalibratedClassifierCV
@@ -15,148 +14,116 @@ os.makedirs(cache_dir, exist_ok=True)
 fastf1.Cache.enable_cache(cache_dir)
 
 # Streamlit app
-st.title("F1 Win Probability Predictor")
+st.title("F1 FastF1 Test App: Explore Race Results")
 
-st.write("Use the dropdown menus below to select a season and round number to predict win probabilities.")
+st.write("Use the dropdown menus below to select a season and round number to display race results.")
 
 # Manual year and round input as dropdown menus
-year_options = list(range(2018, datetime.now().year + 1))
+year_options = list(range(2018, 2025 + 1))
 round_options = list(range(1, 24 + 1))
 
-year = st.selectbox("Select Year", options=year_options, index=year_options.index(datetime.now().year))
+year = st.selectbox("Select Year", options=year_options, index=year_options.index(2023))
 round_number = st.selectbox("Select Round", options=round_options, index=0)
 
-if st.button("Generate Predictions"):
+# Declare session globally
+session = None
 
+if st.button("Load Race Data"):
     try:
-        st.write("Loading historical race data...")
+        st.write(f"Loading race data for **Year {year}, Round {round_number}**...")
 
-        # Step 1: Collect historical race data
-        years = list(range(2018, datetime.now().year))
-        all_race_data = []
+        session = fastf1.get_session(year, round_number, 'R')
+        session.load()
 
-        for y in years:
-            try:
-                schedule = fastf1.get_event_schedule(y)
-            except Exception:
-                continue  # Skip if schedule cannot be loaded
+        st.success(f"✅ Successfully loaded: {session.event['EventName']} ({session.date.date()})")
 
-            for _, race in schedule.iterrows():
-                round_no = race['RoundNumber']
+        # Show session info
+        st.write("### Session Info:")
+        st.json(session.event.to_dict())
 
-                try:
-                    session = fastf1.get_session(y, round_no, 'R')
-                    session.load()
-                except Exception:
-                    continue  # Skip session if it fails to load
-
-                if session.results is None:
-                    continue
-
-                results = session.results.copy()
-
-                # Calculate laps completed
-                if not session.laps.empty:
-                    laps_completed = session.laps.groupby('Driver')['LapNumber'].max().reset_index()
-                    laps_completed.rename(columns={'LapNumber': 'laps'}, inplace=True)
-                    results = results.merge(laps_completed, left_on='Abbreviation', right_on='Driver', how='left')
-                    results.drop(columns=['Driver'], inplace=True)
-                else:
-                    results['laps'] = np.nan
-
-                for _, row in results.iterrows():
-                    all_race_data.append({
-                        'year': y,
-                        'round': round_no,
-                        'driver': row['Abbreviation'],
-                        'team': row['TeamName'],
-                        'grid_position': row['GridPosition'],
-                        'position': row['Position'],
-                        'points': row['Points'],
-                        'laps': row['laps'],
-                    })
-
-        df = pd.DataFrame(all_race_data)
-
-        if df.empty:
-            st.error("No race data collected.")
+        # Show race results in table
+        results = session.results
+        if results is not None and not results.empty:
+            df_results = results[['Abbreviation', 'Position', 'TeamName', 'Points']].sort_values(by='Position')
+            df_results.columns = ['Driver', 'Finish Position', 'Team', 'Points']
+            st.write("### Final Race Results")
+            st.dataframe(df_results)
         else:
-            st.write(f"Collected data for {df.shape[0]} race entries.")
+            st.warning("No results available for this session.")
 
-            # Step 2: Preprocess data
-            df['win'] = (df['position'] == 1).astype(int)
+        # Show lap data sample
+        if not session.laps.empty:
+            st.write("### Sample Lap Data")
+            st.dataframe(session.laps.head())
+        else:
+            st.warning("No lap data available.")
+
+    except Exception as e:
+        st.error(f"❌ Error loading session: {e}")
+
+# --- NEW: Machine learning model button ---
+if st.button("Generate Win Predictions"):
+    try:
+        st.write("Preparing data for prediction...")
+
+        # For simplicity, use the current session only for training (demo purpose)
+        session = fastf1.get_session(year, round_number, 'R')
+        session.load()
+
+        results = session.results
+
+        if results is None or results.empty:
+            st.warning("No results data available to generate predictions.")
+        else:
+            df = results.copy()
+
+            # Simple feature engineering
+            df['win'] = (df['Position'] == 1).astype(int)
 
             le_driver = LabelEncoder()
             le_team = LabelEncoder()
 
-            df['driver_encoded'] = le_driver.fit_transform(df['driver'])
-            df['team_encoded'] = le_team.fit_transform(df['team'])
+            df['driver_encoded'] = le_driver.fit_transform(df['Abbreviation'])
+            df['team_encoded'] = le_team.fit_transform(df['TeamName'])
 
-            # Recency features
-            df.sort_values(by=['driver', 'year', 'round'], inplace=True)
-            df['avg_position_last_3'] = df.groupby('driver')['position'].transform(lambda x: x.rolling(window=3, min_periods=1).mean())
-            df['avg_position_last_5'] = df.groupby('driver')['position'].transform(lambda x: x.rolling(window=5, min_periods=1).mean())
+            # Basic features
+            df['grid_position'] = df['GridPosition']
+            df['points'] = df['Points']
 
-            # Drop rows with missing values in selected features
-            features = ['grid_position', 'team_encoded', 'points', 'laps', 'avg_position_last_3', 'avg_position_last_5']
-            df = df.dropna(subset=features)
+            # Handle laps
+            if not session.laps.empty:
+                laps_completed = session.laps.groupby('Driver')['LapNumber'].max().reset_index()
+                laps_completed.rename(columns={'LapNumber': 'laps'}, inplace=True)
+                df = df.merge(laps_completed, left_on='Abbreviation', right_on='Driver', how='left')
+                df['laps'] = df['laps'].fillna(0)
+                df.drop(columns=['Driver'], inplace=True)
+            else:
+                df['laps'] = 0
 
-            # Step 3: Train model
+            # Features and target
+            features = ['grid_position', 'team_encoded', 'points', 'laps']
             X = df[features]
             y = df['win']
 
+            # Simple train/test split (we will use same data to train and predict for demo purposes)
             X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
+            # Model training
             base_model = xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss')
             calibrated_model = CalibratedClassifierCV(base_model, method='isotonic', cv=3)
             calibrated_model.fit(X_train, y_train)
 
-            st.success("Model training complete.")
+            # Predict probabilities
+            probabilities = calibrated_model.predict_proba(X)[:, 1]
+            df['win_probability'] = probabilities
 
-            # Step 4: Predict selected race
-            try:
-                session = fastf1.get_session(year, round_number, 'R')
-                session.load()
+            st.success(f"Predictions generated for: {session.event['EventName']} on {session.date.date()}")
 
-                if session.results is None:
-                    st.warning("No results available yet for the selected race (grid not set).")
-                else:
-                    race_data = []
-                    history = df.copy()
-
-                    for _, row in session.results.iterrows():
-                        driver = row['Abbreviation']
-                        driver_history = history[history['driver'] == driver].tail(5)
-
-                        avg_pos_last_3 = driver_history.tail(3)['position'].mean() if not driver_history.tail(3).empty else np.nan
-                        avg_pos_last_5 = driver_history['position'].mean() if not driver_history.empty else np.nan
-
-                        race_data.append({
-                            'grid_position': row['GridPosition'],
-                            'team_encoded': le_team.transform([row['TeamName']])[0] if row['TeamName'] in le_team.classes_ else 0,
-                            'points': row['Points'],
-                            'laps': row['Laps'],
-                            'avg_position_last_3': avg_pos_last_3,
-                            'avg_position_last_5': avg_pos_last_5,
-                            'driver': driver
-                        })
-
-                    upcoming_df = pd.DataFrame(race_data).dropna(subset=features)
-
-                    if upcoming_df.empty:
-                        st.warning("Not enough data to make predictions for this race.")
-                    else:
-                        probabilities = calibrated_model.predict_proba(upcoming_df[features])[:, 1]
-                        upcoming_df['win_probability'] = probabilities
-
-                        # Confirm race details
-                        st.write(f"### Predictions for: {session.event['EventName']} on {session.date.date()}")
-
-                        st.write("### Win Probabilities")
-                        st.dataframe(upcoming_df[['driver', 'win_probability']].sort_values(by='win_probability', ascending=False))
-
-            except Exception as e:
-                st.error(f"Error predicting selected race: {e}")
+            # Display predictions
+            df_predictions = df[['Abbreviation', 'win_probability']].sort_values(by='win_probability', ascending=False)
+            df_predictions.columns = ['Driver', 'Win Probability']
+            st.write("### Win Probabilities")
+            st.dataframe(df_predictions)
 
     except Exception as e:
-        st.error(f"Unexpected error: {e}")
+        st.error(f"❌ Error generating predictions: {e}")
