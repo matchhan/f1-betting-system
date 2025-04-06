@@ -1,14 +1,84 @@
-import requests
-import pandas as pd
 import streamlit as st
 import xgboost as xgb
+import pandas as pd
+import numpy as np
+import requests
+import json
 from datetime import datetime
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
 import pytz
 import joblib
+import telegram
+import os
+import fastf1
 
-# ------------------------- Helper Functions -------------------------
+# Telegram Bot Setup
+telegram_bot_token = "7630284552:AAHKzWIuRqMCon032ycjHC5r2AME-y-JEho"
+telegram_chat_id = "7863097165"
+
+# The Odds API Setup
+API_KEY = "475a918d769547f547ae7dbb6ddf02a8"
+BASE_URL = "https://api.the-odds-api.com/v4/sports/motorsport_formula_one/odds"
+
+# Weather API Setup
+weather_api_key = "9902ad598ba458f05379b0deb1f086b7"
+
+# Load and preprocess F1 Data using FastF1
+def load_data():
+    # Try to load the data from a stored CSV file first
+    if os.path.exists("f1_data.csv"):
+        return pd.read_csv('f1_data.csv')
+    else:
+        st.write("No data found. Fetching new data...")
+        # Fetch new data if CSV file does not exist
+        data = fetch_f1_data()
+        return data
+
+def fetch_f1_data():
+    try:
+        # Initialize FastF1
+        fastf1.Cache.enable_cache('f1_cache')  # Enable caching to store F1 data
+
+        # Define the race seasons and rounds to fetch data
+        years = range(2018, 2023)  # Adjust years accordingly
+        race_data = []
+
+        for year in years:
+            season = fastf1.get_event_schedule(year)
+            for race in season:
+                if race['raceName'] not in ['Sprint', 'Qualifying']:  # Skip sprint races
+                    race_result = fastf1.get_race_result(year, race['round'])
+                    qualifying = fastf1.get_qualifying_results(year, race['round'])
+                    practice_sessions = [
+                        fastf1.get_practice_data(year, race['round'], 1),  # Practice 1
+                        fastf1.get_practice_data(year, race['round'], 2),  # Practice 2
+                        fastf1.get_practice_data(year, race['round'], 3),  # Practice 3
+                    ]
+
+                    for driver in race_result['results']:
+                        driver_name = driver['Driver']['familyName']
+                        finishing_position = driver['positionOrder']
+                        time = driver['Time']['time'] if 'Time' in driver else "N/A"
+                        lap_time = driver['FastestLap']['Time']['time'] if 'FastestLap' in driver else "N/A"
+
+                        race_data.append({
+                            "year": year,
+                            "round": race['round'],
+                            "race_name": race['raceName'],
+                            "driver": driver_name,
+                            "finish_position": finishing_position,
+                            "time": time,
+                            "lap_time": lap_time,
+                            "weather": "Sunny",  # Placeholder for weather, you can fetch it from another source
+                        })
+
+        # Convert race data to DataFrame
+        df = pd.DataFrame(race_data)
+        df.to_csv("f1_data.csv", index=False)  # Save the data to CSV for future use
+        st.write("F1 data fetched and saved!")
+        return df
+    except Exception as e:
+        st.error(f"Error fetching data: {str(e)}")
+        return None
 
 # Convert decimal odds to implied probability
 def calculate_implied_probability(odds):
@@ -17,41 +87,67 @@ def calculate_implied_probability(odds):
     except ZeroDivisionError:
         return 0.0
 
-# Calculate stake using the Kelly Criterion
-def kelly_fraction(probability, odds, fraction=0.125):
-    edge = (odds * probability) - 1
-    if edge <= 0:
-        return 0
-    return min(edge / (odds - 1) * fraction, 0.025)  # Cap at 2.5%
+# Format scraper log for display
+def format_scraper_log(df):
+    if df.empty:
+        return "No odds found."
 
-# Format bankroll output (NZD)
-def format_currency(amount):
-    return f"${amount:,.2f} NZD"
+    event_time = df['event_time'].iloc[0].strftime("%Y-%m-%d %H:%M:%S") if 'event_time' in df.columns and not df['event_time'].isna().all() else "Unknown"
+    last_update = df['last_update'].iloc[0] if 'last_update' in df.columns and not df['last_update'].isna().all() else "Unknown"
+
+    log = (
+        f"✅ Odds Scraped: {len(df)} entries\n"
+        f"🕒 Event Time: {event_time}\n"
+        f"🔄 Last Update from Bookmaker: {last_update}"
+    )
+    return log
+
+# Convert bankroll percentage to fixed stake amount
+def calculate_stake(bankroll, percentage):
+    return round(bankroll * (percentage / 100), 2)
 
 # Get current time in NZ timezone
 def get_nz_time():
     return datetime.now(pytz.timezone("Pacific/Auckland")).strftime("%Y-%m-%d %H:%M:%S")
 
-# ------------------------- Weather Data Collection -------------------------
+# Kelly Criterion calculator (1/8 Kelly as you prefer)
+def kelly_fraction(probability, odds, fraction=0.125):
+    edge = (odds * probability) - 1
+    if edge <= 0:
+        return 0
+    return min(edge / (odds - 1) * fraction, 0.025)  # Cap at 2.5% as you specified
 
-def get_weather_data(api_key, circuit):
-    url = f"http://api.openweathermap.org/data/2.5/weather?q={circuit}&appid={api_key}"
-    response = requests.get(url)
-    data = response.json()
-    return data['main']['temp'], data['weather'][0]['description']
+# Format bankroll currency output (NZD)
+def format_currency(amount):
+    return f"${amount:,.2f} NZD"
 
-# ------------------------- Odds Collection from API -------------------------
+# Train Machine Learning Model
+def train_model(df):
+    st.write("Training the model...")
 
-# TheOddsAPI - API Key
-API_KEY = st.secrets["odds_api"]["api_key"]
-BASE_URL = "https://api.the-odds-api.com/v4/sports/motorsport_formula_one/odds"
+    # Preprocess the data here (e.g., feature engineering)
+    X = df.drop(columns=['race_result'])  # Replace with the correct features
+    y = df['race_result']  # Replace with the correct target variable
+    
+    model = xgb.XGBClassifier()
+    model.fit(X, y)
 
-def scrape_odds():
+    joblib.dump(model, 'f1_model.joblib')
+    st.write("Model training complete!")
+
+# Send a test message to Telegram
+def send_telegram_message(message):
+    bot = telegram.Bot(token=telegram_bot_token)
+    bot.send_message(chat_id=telegram_chat_id, text=message)
+    st.write("Test message sent to Telegram!")
+
+# Scrape Pinnacle Odds
+def scrape_pinnacle_odds():
     try:
         params = {
             "apiKey": API_KEY,
             "regions": "eu",
-            "markets": "h2h",
+            "markets": "h2h",  # Head to head = race winner
             "oddsFormat": "decimal",
             "bookmakers": "pinnacle"
         }
@@ -93,112 +189,11 @@ def scrape_odds():
                         })
 
         df = pd.DataFrame(all_odds)
-        return df
+
+        if df.empty:
+            return pd.DataFrame(), "No Pinnacle F1 odds found."
+
+        return df, format_scraper_log(df)
 
     except Exception as e:
         return pd.DataFrame(), f"Error scraping Pinnacle odds: {str(e)}"
-
-# ------------------------- Machine Learning Model -------------------------
-
-def train_model():
-    df = scrape_odds()
-    if df.empty:
-        st.error("No data available for model training.")
-        return None
-
-    X = df[['implied_probability', 'odds']]  # Example features
-    y = df['market']  # Predict market type (this would need adjustment)
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-    model = xgb.XGBClassifier(use_label_encoder=False, eval_metric='mlogloss')
-    model.fit(X_train, y_train)
-
-    y_pred = model.predict(X_test)
-    accuracy = accuracy_score(y_test, y_pred)
-    st.success(f"Model trained with accuracy: {accuracy:.2f}")
-    
-    # Save model
-    joblib.dump(model, 'f1_model.joblib')
-
-    return model
-
-# ------------------------- Betting & Notifications -------------------------
-
-def calculate_bet_size(probability, odds, bankroll):
-    stake = kelly_fraction(probability, odds)
-    stake_amount = stake * bankroll
-    return stake_amount
-
-def send_telegram_notification(message):
-    bot_token = st.secrets["telegram_bot_token"]
-    chat_id = st.secrets["telegram_chat_id"]
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage?chat_id={chat_id}&text={message}"
-    requests.get(url)
-
-# ------------------------- Streamlit Interface -------------------------
-
-# Page 1: Manual Bet Verification
-def bet_verification_page():
-    st.title("Manual Bet Verification")
-    bet_time = st.text_input("Enter Race Time (YYYY-MM-DD HH:MM:SS)", "")
-    current_odds = st.number_input("Enter Current Odds", min_value=1.0)
-    bet_odds = st.number_input("Enter Bet Odds", min_value=1.0)
-    probability = st.number_input("Enter Predicted Probability", min_value=0.0, max_value=1.0)
-
-    if st.button("Verify Bet"):
-        bet_size = calculate_bet_size(probability, bet_odds, 500)  # Example: using $500 bankroll
-        message = f"Bet verification complete: \nRace Time: {bet_time}\nOdds: {current_odds}\nBet Size: {bet_size}"
-        send_telegram_notification(message)
-
-# Page 2: Model Training and Betting Notification
-def model_training_page():
-    st.title("Train Machine Learning Model")
-    if st.button("Train Model"):
-        model = train_model()
-        if model:
-            st.success("Model trained successfully!")
-
-    df = scrape_odds()
-    if not df.empty:
-        st.dataframe(df)
-
-# ------------------------- Main Streamlit App -------------------------
-
-def main():
-    st.sidebar.title("F1 Betting System")
-
-    page = st.sidebar.selectbox("Select a Page", ["Bet Verification", "Model Training"])
-
-    if page == "Bet Verification":
-        bet_verification_page()
-    elif page == "Model Training":
-        model_training_page()
-
-# Load your Telegram credentials from Streamlit secrets
-telegram_bot_token = st.secrets["telegram_bot_token"]
-telegram_chat_id = st.secrets["telegram_chat_id"]
-
-# Function to send a test message to Telegram
-def send_telegram_message(message):
-    url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
-    payload = {
-        "chat_id": telegram_chat_id,
-        "text": message
-    }
-    try:
-        response = requests.post(url, data=payload)
-        if response.status_code == 200:
-            st.success("Test message sent successfully!")
-        else:
-            st.error(f"Failed to send message: {response.text}")
-    except Exception as e:
-        st.error(f"Error sending message: {str(e)}")
-
-# Add a button in the Streamlit app to send the test message
-if st.button('Send Test Telegram Message'):
-    send_telegram_message("This is a test message from the F1 Betting System.")
-
-if __name__ == "__main__":
-    main()
-
