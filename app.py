@@ -7,38 +7,45 @@ from datetime import datetime
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
 from sklearn.calibration import CalibratedClassifierCV
-from sklearn.metrics import log_loss, accuracy_score
 import xgboost as xgb
 
-# Prepare FastF1 cache
+# Set up cache
 cache_dir = './fastf1_cache'
 os.makedirs(cache_dir, exist_ok=True)
 fastf1.Cache.enable_cache(cache_dir)
 
-# Streamlit App setup
+# Streamlit app
 st.title("F1 Win Probability Predictor")
-st.write("Click the button below to load data, train the model, and predict win probabilities for the next race.")
+
+st.write("Use the dropdown menus below to select a season and round number to predict win probabilities.")
+
+# Manual year and round input as dropdown menus
+year_options = list(range(2018, datetime.now().year + 1))
+round_options = list(range(1, 24 + 1))
+
+year = st.selectbox("Select Year", options=year_options, index=year_options.index(datetime.now().year))
+round_number = st.selectbox("Select Round", options=round_options, index=0)
 
 if st.button("Generate Predictions"):
 
     try:
-        # Step 1: Data collection
         st.write("Loading historical race data...")
 
+        # Step 1: Collect historical race data
         years = list(range(2018, datetime.now().year))
         all_race_data = []
 
-        for year in years:
+        for y in years:
             try:
-                schedule = fastf1.get_event_schedule(year)
+                schedule = fastf1.get_event_schedule(y)
             except Exception:
                 continue  # Skip if schedule cannot be loaded
 
             for _, race in schedule.iterrows():
-                round_number = race['RoundNumber']
+                round_no = race['RoundNumber']
 
                 try:
-                    session = fastf1.get_session(year, round_number, 'R')
+                    session = fastf1.get_session(y, round_no, 'R')
                     session.load()
                 except Exception:
                     continue  # Skip session if it fails to load
@@ -59,8 +66,8 @@ if st.button("Generate Predictions"):
 
                 for _, row in results.iterrows():
                     all_race_data.append({
-                        'year': year,
-                        'round': round_number,
+                        'year': y,
+                        'round': round_no,
                         'driver': row['Abbreviation'],
                         'team': row['TeamName'],
                         'grid_position': row['GridPosition'],
@@ -90,7 +97,7 @@ if st.button("Generate Predictions"):
             df['avg_position_last_3'] = df.groupby('driver')['position'].transform(lambda x: x.rolling(window=3, min_periods=1).mean())
             df['avg_position_last_5'] = df.groupby('driver')['position'].transform(lambda x: x.rolling(window=5, min_periods=1).mean())
 
-            # Drop any rows with missing features
+            # Drop rows with missing values in selected features
             features = ['grid_position', 'team_encoded', 'points', 'laps', 'avg_position_last_3', 'avg_position_last_5']
             df = df.dropna(subset=features)
 
@@ -106,61 +113,50 @@ if st.button("Generate Predictions"):
 
             st.success("Model training complete.")
 
-            # Step 4: Predict next race
-            latest_year = datetime.now().year
+            # Step 4: Predict selected race
             try:
-                schedule = fastf1.get_event_schedule(latest_year)
-                upcoming_races = schedule[schedule['Session1Date'] > datetime.now()]
+                session = fastf1.get_session(year, round_number, 'R')
+                session.load()
 
-                if upcoming_races.empty:
-                    st.warning("No upcoming races found.")
+                if session.results is None:
+                    st.warning("No results available yet for the selected race (grid not set).")
                 else:
-                    next_race = upcoming_races.iloc[0]
-                    round_number = next_race['RoundNumber']
-                    race_name = next_race['EventName']
-                    race_date = next_race['Session1Date'].date()
+                    race_data = []
+                    history = df.copy()
 
-                    st.write(f"### Next Race: {race_name} on {race_date}")
+                    for _, row in session.results.iterrows():
+                        driver = row['Abbreviation']
+                        driver_history = history[history['driver'] == driver].tail(5)
 
-                    session = fastf1.get_session(latest_year, round_number, 'R')
-                    session.load()
+                        avg_pos_last_3 = driver_history.tail(3)['position'].mean() if not driver_history.tail(3).empty else np.nan
+                        avg_pos_last_5 = driver_history['position'].mean() if not driver_history.empty else np.nan
 
-                    if session.results is None:
-                        st.warning("No results available yet for the next race (grid not set).")
+                        race_data.append({
+                            'grid_position': row['GridPosition'],
+                            'team_encoded': le_team.transform([row['TeamName']])[0] if row['TeamName'] in le_team.classes_ else 0,
+                            'points': row['Points'],
+                            'laps': row['Laps'],
+                            'avg_position_last_3': avg_pos_last_3,
+                            'avg_position_last_5': avg_pos_last_5,
+                            'driver': driver
+                        })
+
+                    upcoming_df = pd.DataFrame(race_data).dropna(subset=features)
+
+                    if upcoming_df.empty:
+                        st.warning("Not enough data to make predictions for this race.")
                     else:
-                        race_data = []
-                        history = df.copy()
+                        probabilities = calibrated_model.predict_proba(upcoming_df[features])[:, 1]
+                        upcoming_df['win_probability'] = probabilities
 
-                        for _, row in session.results.iterrows():
-                            driver = row['Abbreviation']
-                            driver_history = history[history['driver'] == driver].tail(5)
+                        # Confirm race details
+                        st.write(f"### Predictions for: {session.event['EventName']} on {session.date.date()}")
 
-                            avg_pos_last_3 = driver_history.tail(3)['position'].mean() if not driver_history.tail(3).empty else np.nan
-                            avg_pos_last_5 = driver_history['position'].mean() if not driver_history.empty else np.nan
-
-                            race_data.append({
-                                'grid_position': row['GridPosition'],
-                                'team_encoded': le_team.transform([row['TeamName']])[0] if row['TeamName'] in le_team.classes_ else 0,
-                                'points': row['Points'],
-                                'laps': row['Laps'],
-                                'avg_position_last_3': avg_pos_last_3,
-                                'avg_position_last_5': avg_pos_last_5,
-                                'driver': driver
-                            })
-
-                        upcoming_df = pd.DataFrame(race_data).dropna(subset=features)
-
-                        if upcoming_df.empty:
-                            st.warning("Not enough data to make predictions for the next race.")
-                        else:
-                            probabilities = calibrated_model.predict_proba(upcoming_df[features])[:, 1]
-                            upcoming_df['win_probability'] = probabilities
-
-                            st.write("### Win Probabilities for Next Race")
-                            st.dataframe(upcoming_df[['driver', 'win_probability']].sort_values(by='win_probability', ascending=False))
+                        st.write("### Win Probabilities")
+                        st.dataframe(upcoming_df[['driver', 'win_probability']].sort_values(by='win_probability', ascending=False))
 
             except Exception as e:
-                st.error(f"Error predicting next race: {e}")
+                st.error(f"Error predicting selected race: {e}")
 
     except Exception as e:
         st.error(f"Unexpected error: {e}")
