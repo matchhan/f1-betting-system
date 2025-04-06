@@ -1,163 +1,145 @@
-import streamlit as st
-import xgboost as xgb
+import fastf1
 import pandas as pd
 import numpy as np
-import requests
-import json
+import streamlit as st
+from tqdm import tqdm
 from datetime import datetime
-import pytz
-import joblib
-import telegram
-import os
-import fastf1
-import asyncio  # Import asyncio to handle async calls
+from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import train_test_split
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.metrics import log_loss, accuracy_score
+import xgboost as xgb
 
+# Initialise FastF1 cache
+fastf1.Cache.enable_cache('./fastf1_cache')
 
+# Streamlit App
+st.title("F1 Race Win Probability Predictor")
+st.write("Click the button below to generate win probabilities for the next race.")
 
-# Function to calculate implied probability from odds
-def calculate_implied_probability(odds):
-    try:
-        return round(1 / odds, 4)
-    except ZeroDivisionError:
-        return 0.0
+if st.button('Predict Next Race Probabilities'):
 
-# Load and preprocess F1 Data using FastF1
-def load_data():
-    if os.path.exists("f1_data.csv"):
-        return pd.read_csv('f1_data.csv')
+    # Step 1: Data collection
+    years = list(range(2018, datetime.now().year + 1))
+    all_race_data = []
+
+    st.write("Collecting race data...")
+
+    for year in tqdm(years, desc="Seasons"):
+        schedule = fastf1.get_event_schedule(year)
+
+        for _, race in schedule.iterrows():
+            race_name = race['EventName']
+            race_date = race['Session1Date'].date()
+            round_number = race['RoundNumber']
+
+            try:
+                session = fastf1.get_session(year, round_number, 'R')
+                session.load()
+            except Exception as e:
+                print(f"Failed to load session {race_name}: {e}")
+                continue
+
+            results = session.results
+            if results is None:
+                continue
+
+            for index, row in results.iterrows():
+                all_race_data.append({
+                    'year': year,
+                    'round': round_number,
+                    'race_name': race_name,
+                    'date': race_date,
+                    'driver': row['Abbreviation'],
+                    'team': row['TeamName'],
+                    'grid_position': row['GridPosition'],
+                    'position': row['Position'],
+                    'points': row['Points'],
+                    'laps': row['Laps'],
+                    'status': row['Status'],
+                    'fastest_lap_time': row['FastestLapTime'],
+                    'fastest_lap_speed': row['FastestLapSpeed'],
+                })
+
+    df = pd.DataFrame(all_race_data)
+
+    if df.empty:
+        st.error("No race data collected. Please check FastF1 installation.")
     else:
-        st.write("No data found. Fetching new data...")
-        data = fetch_f1_data()
-        return data
+        st.success(f"Collected data for {df.shape[0]} race entries.")
 
-def fetch_f1_data():
-    try:
-        cache_dir = 'f1_cache'
-        if not os.path.exists(cache_dir):
-            os.makedirs(cache_dir)
+        # Step 2: Preprocess data
+        st.write("Preprocessing data...")
 
-        fastf1.Cache.enable_cache(cache_dir)  # Enable caching to store F1 data
+        df['win'] = (df['position'] == 1).astype(int)
 
-        years = range(2018, 2023)
-        race_data = []
+        le_driver = LabelEncoder()
+        le_team = LabelEncoder()
 
-        for year in years:
-            season = fastf1.get_event_schedule(year)
-            for race in season:
-                if race['raceName'] not in ['Sprint', 'Qualifying']:  # Skip sprint races
-                    try:
-                        race_result = fastf1.get_race_result(year, race['round'])
-                        # Log the type of the response to identify any issues
-                        st.write(f"Race result for {race['raceName']} (Year {year}, Round {race['round']}): {type(race_result)}")
-                        st.write(f"Race result content: {race_result}")  # Output the actual result to debug
+        df['driver_encoded'] = le_driver.fit_transform(df['driver'])
+        df['team_encoded'] = le_team.fit_transform(df['team'])
 
-                        if not isinstance(race_result, dict):
-                            st.error(f"Unexpected data type for race result: {type(race_result)}")
-                            continue
-                    except Exception as e:
-                        st.error(f"Error fetching race result: {str(e)}")
-                        continue
+        features = ['grid_position', 'team_encoded', 'points', 'laps', 'fastest_lap_speed']
+        df = df.dropna(subset=features)
 
-                    # Debugging: Check if race_result['results'] is accessible
-                    if isinstance(race_result, dict) and 'results' in race_result:
-                        for driver in race_result['results']:
-                            if isinstance(driver, dict) and 'Driver' in driver:
-                                driver_name = driver['Driver']['familyName']
-                                race_data.append({
-                                    "year": year,
-                                    "round": race['round'],
-                                    "race_name": race['raceName'],
-                                    "driver": driver_name,
-                                })
-                    else:
-                        st.error("No results found or incorrect data format for race result.")
-                        continue
+        X = df[features]
+        y = df['win']
 
-        df = pd.DataFrame(race_data)
-        df.to_csv("f1_data.csv", index=False)  # Save the data to CSV for future use
-        st.write("F1 data fetched and saved!")
-        return df
-    except Exception as e:
-        st.error(f"Error fetching data: {str(e)}")
-        return None
+        # Step 3: Train/test split
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-def fetch_weather_data(city_name):
-    try:
-        params = {'q': city_name, 'appid': weather_api_key, 'units': 'metric'}
-        response = requests.get(weather_base_url, params=params)
-        response.raise_for_status()
-        weather_data = response.json()
-        temperature = weather_data['main']['temp']
-        weather_desc = weather_data['weather'][0]['description']
-        return f"{temperature}°C, {weather_desc}"
-    except Exception as e:
-        st.error(f"Error fetching weather data: {str(e)}")
-        return "Unknown"
+        # Step 4: Model training with calibration
+        st.write("Training model...")
+        base_model = xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss')
+        calibrated_model = CalibratedClassifierCV(base_model, method='isotonic', cv=3)
+        calibrated_model.fit(X_train, y_train)
 
-# Sending test telegram message
-async def send_telegram_message(message):
-    bot = telegram.Bot(token=telegram_bot_token)
-    await bot.send_message(chat_id=telegram_chat_id, text=message)
-    st.write("Test message sent to Telegram!")
+        # Step 5: Evaluate model
+        y_pred_proba = calibrated_model.predict_proba(X_test)[:, 1]
+        y_pred = calibrated_model.predict(X_test)
 
-def manual_data_entry():
-    st.subheader("Manually Enter F1 Race Data")
+        st.write(f'Log Loss: {log_loss(y_test, y_pred_proba):.4f}')
+        st.write(f'Accuracy: {accuracy_score(y_test, y_pred):.4f}')
 
-    race_name = st.text_input("Race Name", "")
-    event_time = st.date_input("Event Date", datetime.today())
-    driver_name = st.text_input("Driver Name", "")
-    odds = st.number_input("Odds", min_value=1.0, format="%.2f")
-    
-    implied_prob = calculate_implied_probability(odds)
+        # Step 6: Predict next race
+        st.write("Predicting next race...")
 
-    if st.button("Add Data"):
-        data = {
-            "sport": "F1",
-            "race": race_name,
-            "event_time": event_time,
-            "driver": driver_name,
-            "odds": odds,
-            "implied_probability": implied_prob,
-            "bookmaker": "Manual Entry",
-            "market": "h2h",  # Assuming it's always a head-to-head market for now
-        }
+        latest_year = datetime.now().year
+        schedule = fastf1.get_event_schedule(latest_year)
+        upcoming_races = schedule[schedule['Session1Date'] > datetime.now()]
 
-        df = pd.DataFrame([data])
-        return df
-    return None
-
-# Main function with test buttons and logs
-def main():
-    st.title("F1 Betting System")
-
-    # Load F1 data
-    data = load_data()
-    if data is not None:
-        st.write("Displaying F1 Data:")
-        st.dataframe(data)
-    
-    # Button to test loading F1 data
-    if st.button("Test Fetch F1 Data"):
-        st.write("Testing F1 data fetch...")
-        test_data = fetch_f1_data()
-        if test_data is not None:
-            st.write("F1 Data fetched successfully!")
-            st.dataframe(test_data)
+        if upcoming_races.empty:
+            st.warning("No upcoming races found.")
         else:
-            st.write("Error fetching F1 data.")
-    
-    # Button to send test Telegram message
-    if st.button("Send Test Telegram"):
-        asyncio.run(send_telegram_message("Test message from your F1 Betting System!"))
-    
-    # Radio button for data entry method
-    entry_choice = st.radio("Choose Data Entry Method", ("Manually Enter Data"))
+            next_race = upcoming_races.iloc[0]
+            round_number = next_race['RoundNumber']
 
-    if entry_choice == "Manually Enter Data":
-        df = manual_data_entry()
-        if df is not None:
-            st.write("Manually Entered Data:")
-            st.dataframe(df)
+            try:
+                session = fastf1.get_session(latest_year, round_number, 'R')
+                session.load()
 
-if __name__ == "__main__":
-    main()
+                race_data = []
+
+                results = session.results
+                if results is None:
+                    st.warning("No results available yet for the next race.")
+                else:
+                    for index, row in results.iterrows():
+                        race_data.append({
+                            'grid_position': row['GridPosition'],
+                            'team_encoded': le_team.transform([row['TeamName']])[0] if row['TeamName'] in le_team.classes_ else 0,
+                            'points': row['Points'],
+                            'laps': row['Laps'],
+                            'fastest_lap_speed': row['FastestLapSpeed'],
+                            'driver': row['Abbreviation']
+                        })
+
+                    upcoming_df = pd.DataFrame(race_data)
+                    probabilities = calibrated_model.predict_proba(upcoming_df[features])[:, 1]
+                    upcoming_df['win_probability'] = probabilities
+
+                    st.write("Win Probabilities for Next Race:")
+                    st.dataframe(upcoming_df[['driver', 'win_probability']].sort_values(by='win_probability', ascending=False))
+
+            except Exception as e:
+                st.error(f"Failed to load next race session: {e}")
