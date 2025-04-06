@@ -25,19 +25,39 @@ st.write("Click the button below to generate win probabilities for the next race
 if st.button('Predict Next Race Probabilities'):
 
     # Step 1: Data collection
-    years = list(range(2018, datetime.now().year + 1))
-    all_race_data = []
-
     st.write("Collecting race data...")
+
+    # Detect available years safely
+    years = []
+    for year in range(2018, datetime.now().year + 2):  # Check up to next year
+        try:
+            fastf1.get_event_schedule(year)
+            years.append(year)
+        except Exception:
+            st.warning(f"Warning: No schedule found for {year}. Skipping.")
+            continue
+
+    all_race_data = []
 
     # Streamlit progress bar
     progress_text = "Loading race data..."
+    total_races = 0
+    for year in years:
+        try:
+            total_races += len(fastf1.get_event_schedule(year))
+        except Exception as e:
+            st.warning(f"Warning: Failed to load schedule for {year}. Skipping.")
+            continue
+
     progress_bar = st.progress(0, text=progress_text)
-    total_races = sum(len(fastf1.get_event_schedule(year)) for year in years)
     race_counter = 0
 
     for year in years:
-        schedule = fastf1.get_event_schedule(year)
+        try:
+            schedule = fastf1.get_event_schedule(year)
+        except Exception as e:
+            st.warning(f"Warning: Failed to load schedule for {year}. Skipping.")
+            continue
 
         for _, race in schedule.iterrows():
             race_name = race['EventName']
@@ -153,8 +173,11 @@ if st.button('Predict Next Race Probabilities'):
         st.write("Predicting next race...")
 
         latest_year = datetime.now().year
-        schedule = fastf1.get_event_schedule(latest_year)
-        upcoming_races = schedule[schedule['Session1Date'] > datetime.now()]
+        try:
+            schedule = fastf1.get_event_schedule(latest_year)
+            upcoming_races = schedule[schedule['Session1Date'] > datetime.now()]
+        except Exception:
+            upcoming_races = pd.DataFrame()
 
         if upcoming_races.empty:
             st.warning("No upcoming races found.")
